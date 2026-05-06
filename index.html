@@ -639,21 +639,38 @@
     return out;
   }
 
+  // Trim description at the nearest sentence boundary so it doesn't cut mid-word.
+  function trimDesc(text, max = 400) {
+    if (!text || text.length <= max) return text ?? null;
+    const cut = text.lastIndexOf('. ', max);
+    return cut > 60 ? text.slice(0, cut + 1) : text.slice(0, max - 1) + '…';
+  }
+
   async function scrapeHomepage(domain) {
     try {
       const html = await fetch('https://corsproxy.io/?' + encodeURIComponent('https://' + domain))
         .then(r => r.ok ? r.text() : Promise.reject());
       const ld = parseJsonLd(html);
-      // Extract company name from JSON-LD → og:site_name → <title>
       const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
       const titleName  = titleMatch ? titleMatch[1].split(/[|\-–—•]/)[0].trim() : null;
+
+      // Validate founding year — must look like a plausible 4-digit year.
+      const rawYear = ld.founded ?? null;
+      const founded = rawYear && /^(1[89]\d\d|20[012]\d)$/.test(String(rawYear).trim())
+        ? String(rawYear).trim() : null;
+
+      // Validate employee count — must be purely numeric after stripping separators.
+      const rawEmp   = ld.employees ?? null;
+      const empClean = rawEmp ? String(rawEmp).replace(/[,.\s]/g, '') : null;
+      const employees = empClean && /^\d+$/.test(empClean) ? empClean : null;
+
       return {
         name:      ld.name ?? parseMeta(html, 'og:site_name') ?? titleName ?? null,
-        desc:      ld.desc ?? parseMeta(html, 'og:description', 'description') ?? null,
-        logo:      ld.logo ?? parseMeta(html, 'og:image') ?? null,
-        founded:   ld.founded   ?? null,
-        hq:        ld.hq        ?? null,
-        employees: ld.employees ?? null,
+        desc:      trimDesc(ld.desc ?? parseMeta(html, 'og:description', 'description') ?? null),
+        logo:      ld.logo ?? null,   // og:image is a page hero, not a logo — skip it
+        founded,
+        hq:        ld.hq ?? null,
+        employees,
       };
     } catch { return {}; }
   }
@@ -800,20 +817,39 @@
     let domain = null;
     try { domain = website ? new URL(website).hostname.replace(/^www\./, '') : null; } catch {}
 
-    const wikiTitle = entity.sitelinks?.enwiki?.title ?? null;
-    const wiki = wikiTitle
-      ? await fetch('https://en.wikipedia.org/api/rest_v1/page/summary/' + encodeURIComponent(wikiTitle))
-          .then(r => r.ok ? r.json() : null).catch(() => null)
-      : null;
+    const wikiTitle  = entity.sitelinks?.enwiki?.title ?? null;
+    // P159 = headquarters location (Q-node), P452 = industry (Q-node)
+    const hqId       = entity.claims?.P159?.[0]?.mainsnak?.datavalue?.value?.id ?? null;
+    const industryId = entity.claims?.P452?.[0]?.mainsnak?.datavalue?.value?.id ?? null;
+    const idsToResolve = [hqId, industryId].filter(Boolean);
 
-    const extract   = wiki?.extract ?? '';
-    const wikiThumb = wiki?.thumbnail?.source ?? null;
+    // Run Wikipedia summary + Q-node label resolution in parallel.
+    const [wiki, labelRes] = await Promise.all([
+      wikiTitle
+        ? fetch('https://en.wikipedia.org/api/rest_v1/page/summary/' + encodeURIComponent(wikiTitle))
+            .then(r => r.ok ? r.json() : null).catch(() => null)
+        : Promise.resolve(null),
+      idsToResolve.length
+        ? fetch('https://www.wikidata.org/w/api.php?' + new URLSearchParams({
+            action: 'wbgetentities', ids: idsToResolve.join('|'),
+            props: 'labels', languages: 'en',
+            format: 'json', origin: '*',
+          })).then(r => r.json()).catch(() => null)
+        : Promise.resolve(null),
+    ]);
+
+    const extract    = wiki?.extract ?? '';
+    const wikiThumb  = wiki?.thumbnail?.source ?? null;
     const commonsLogo = logoFile
       ? 'https://commons.wikimedia.org/wiki/Special:FilePath/' + encodeURIComponent(logoFile)
       : null;
 
+    // Resolve HQ city and industry name from the label lookup.
+    const hq       = hqId       ? (labelRes?.entities?.[hqId]?.labels?.en?.value       ?? null) : null;
+    const industry = industryId ? (labelRes?.entities?.[industryId]?.labels?.en?.value ?? null) : (hit.description ?? null);
+
     const wdName = entity.labels?.en?.value ?? hit.label;
-    const wdDesc = extract ? (extract.length > 400 ? extract.slice(0, 397) + '…' : extract) : (hit.description ?? null);
+    const wdDesc = trimDesc(extract || (hit.description ?? null));
 
     return {
       name:         wdName,
@@ -823,9 +859,9 @@
       website,
       domain,
       founded,
-      hq:           null,
+      hq,
       employees,
-      industry:     hit.description ?? null,
+      industry,
       revenue:      null,
       erp:          inferErp(wdName, wdDesc),
       tags:         null,
