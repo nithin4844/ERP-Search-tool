@@ -78,27 +78,43 @@
   body { font-family: 'Inter', system-ui, sans-serif; }
   .material-symbols-outlined { font-size: 20px; vertical-align: middle; }
 
-  /* CSE renders results inside a positioned "overlay" wrapper even for
-     searchresults-only. Force it back into document flow so results render
-     inline inside the news card. Also hide the modal backdrop / close button
-     that only make sense in popup mode. */
+  /* Make CSE fill the full width of the news card */
+  #news-results,
+  #news-results .gsc-control-cse,
+  #news-results .gsc-control-wrapper-cse,
+  #news-results .gsc-results-wrapper-nooverlay,
+  #news-results .gsc-results-wrapper-overlay {
+      width: 100% !important;
+      max-width: 100% !important;
+      box-sizing: border-box !important;
+  }
+
+  /* Hard-cap the results pane and scroll the rest internally.
+     Targets both layout variants: 'nooverlay' (gcse-search default)
+     and 'overlay' (searchresults-only / overlay engines). */
+  #news-results .gsc-results-wrapper-nooverlay,
   #news-results .gsc-results-wrapper-overlay {
       position: static !important;
-      width: 100% !important;
-      height: auto !important;
-      max-height: none !important;
-      min-height: 0 !important;
+      max-height: 520px !important;
+      overflow-y: auto !important;
+      overflow-x: hidden !important;
       background: transparent !important;
       box-shadow: none !important;
-      border: none !important;
-      padding: 0 !important;
-      margin: 0 !important;
-      overflow: visible !important;
-      z-index: auto !important;
-      transform: none !important;
-      visibility: visible !important;
-      opacity: 1 !important;
+      border: 1px solid #E5E7EB !important;
+      border-radius: 0.25rem !important;
+      padding: 4px 8px !important;
   }
+  /* Custom scrollbar */
+  #news-results .gsc-results-wrapper-nooverlay::-webkit-scrollbar,
+  #news-results .gsc-results-wrapper-overlay::-webkit-scrollbar { width: 8px; }
+  #news-results .gsc-results-wrapper-nooverlay::-webkit-scrollbar-thumb,
+  #news-results .gsc-results-wrapper-overlay::-webkit-scrollbar-thumb {
+      background: #CBD5E1; border-radius: 4px;
+  }
+  #news-results .gsc-results-wrapper-nooverlay::-webkit-scrollbar-thumb:hover,
+  #news-results .gsc-results-wrapper-overlay::-webkit-scrollbar-thumb:hover { background: #94A3B8; }
+
+  /* Hide popup-only chrome */
   .gsc-modal-background-image,
   .gsc-modal-background-image-visible { display: none !important; }
   #news-results .gsc-results-close-btn,
@@ -224,13 +240,13 @@
         </div>
 
         <!--
-          Inline-only results. searchresults-only renders directly into this div
-          (no overlay/popup), so the news stays confined to this card.
+          Standard Google Programmable Search element with the search box.
           - data-queryParameterName="q": CSE reads ?q=... from the URL on load.
-          - data-autoSearchOnLoad="true": runs the search automatically when q is present.
-          To change company, use the header search — it submits ?q=<new> and reloads.
+          - data-autoSearchOnLoad="true": runs the search automatically.
+          The result wrapper height is capped via CSS so the page doesn't grow
+          arbitrarily — results scroll internally past the cap.
         -->
-        <div id="news-results" class="gcse-searchresults-only"
+        <div id="news-results" class="gcse-search"
              data-queryParameterName="q"
              data-autoSearchOnLoad="true"></div>
 
