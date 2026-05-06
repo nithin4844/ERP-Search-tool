@@ -78,16 +78,43 @@
   body { font-family: 'Inter', system-ui, sans-serif; }
   .material-symbols-outlined { font-size: 20px; vertical-align: middle; }
 
-  /* Make CSE fill the full width of the news card */
+  /* Force every CSE wrapper, table, and result row to fill the card width.
+     CSE's own stylesheet sets fixed/auto widths on tables and inner cells,
+     which leaves a large white gap on the right of the news card by default. */
   #news-results,
   #news-results .gsc-control-cse,
   #news-results .gsc-control-wrapper-cse,
   #news-results .gsc-results-wrapper-nooverlay,
-  #news-results .gsc-results-wrapper-overlay {
+  #news-results .gsc-results-wrapper-overlay,
+  #news-results .gsc-positioningWrapper,
+  #news-results .gsc-resultsbox-visible,
+  #news-results .gsc-wrapper,
+  #news-results .gsc-resultsRoot,
+  #news-results .gsc-results,
+  #news-results .gsc-input-box,
+  #news-results form.gsc-search-box,
+  #news-results table.gsc-search-box,
+  #news-results .gs-result,
+  #news-results .gs-webResult,
+  #news-results .gsc-result,
+  #news-results .gsc-above-wrapper-area,
+  #news-results .gsc-above-wrapper-area-container,
+  #news-results .gsc-above-wrapper-area-backfill-container,
+  #news-results table.gsc-table-result,
+  #news-results .gs-imageResult,
+  #news-results .gsc-thumbnail-inside,
+  #news-results .gsc-url-top {
       width: 100% !important;
       max-width: 100% !important;
       box-sizing: border-box !important;
   }
+  /* The search box's td cells default to fixed widths; let them flex */
+  #news-results table.gsc-search-box td.gsc-input { width: auto !important; }
+  /* Result thumbnail cell: keep it sized; the snippet cell takes the rest */
+  #news-results table.gsc-table-result { table-layout: auto !important; }
+  #news-results td.gsc-table-cell-thumbnail,
+  #news-results td.gsc-thumbnail { width: 1% !important; white-space: nowrap; }
+  #news-results td.gsc-table-cell-snippet-close { width: auto !important; }
 
   /* Hard-cap the results pane and scroll the rest internally.
      Targets both layout variants: 'nooverlay' (gcse-search default)
