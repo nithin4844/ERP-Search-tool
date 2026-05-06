@@ -592,267 +592,236 @@
   })();
 </script>
 
-<!-- ── Company Snapshot: Google Sheet → Wikipedia → OpenCorporates (govt registries) → fallback ── -->
+<!-- ── Company Snapshot ──────────────────────────────────────────────── -->
 <script>
 (function () {
-  const q = (new URLSearchParams(location.search).get('q') || '').trim();
-  if (!q) return;
+  'use strict';
 
-  // ── CONFIGURATION ────────────────────────────────────────────────
+  const query = new URLSearchParams(location.search).get('q')?.trim() ?? '';
+  if (!query) return;
+
   // For companies not found automatically, publish a Google Sheet as CSV.
-  // Column headers (row 1, exact names):
-  //   query | name | desc | industry | hq | employees | founded | revenue | erp | website | logo | tags
-  // File → Share → Publish to web → CSV. Paste URL below.
-  const SHEET_CSV_URL = '';
+  // Columns (row 1 header): query | name | desc | industry | hq | employees | founded | revenue | erp | website | logo | tags
+  // File → Share → Publish to web → CSV. Paste the URL here.
+  const SHEET_URL = '';
 
-  // ── Website scraping (JSON-LD + meta tags) ───────────────────────
-  function getMeta(html, ...attrs) {
-    for (const a of attrs) {
-      const re  = new RegExp('<meta[^>]+(?:name|property)=["\']' + a + '["\'][^>]+content=["\']([^"\']+)["\']', 'i');
-      const re2 = new RegExp('<meta[^>]+content=["\']([^"\']+)["\'][^>]+(?:name|property)=["\']' + a + '["\']', 'i');
-      const m   = html.match(re) || html.match(re2);
-      if (m?.[1]) return m[1];
+  // ─── Helpers ─────────────────────────────────────────────────────
+
+  function parseMeta(html, ...names) {
+    for (const name of names) {
+      for (const attr of ['name', 'property']) {
+        const m = html.match(new RegExp(`<meta[^>]+${attr}=["']${name}["'][^>]+content=["']([^"']+)["']`, 'i'))
+               ?? html.match(new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+${attr}=["']${name}["']`, 'i'));
+        if (m) return m[1];
+      }
     }
     return null;
   }
 
   function parseJsonLd(html) {
-    const out = {};
-    const re  = /<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
+    const result = {};
+    const re = /<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
     let m;
-    while ((m = re.exec(html)) !== null) {
+    while ((m = re.exec(html))) {
       try {
-        let d = JSON.parse(m[1]);
-        if (Array.isArray(d)) d = d.find(x => /Organization|Corporation|Company/i.test(x['@type'] || '')) || d[0];
-        if (!d) continue;
-        if (d.foundingDate)              out.founded   = String(d.foundingDate).slice(0, 4);
-        if (d.numberOfEmployees?.value)  out.employees = String(d.numberOfEmployees.value);
-        if (d.description && !out.desc)  out.desc      = d.description;
-        if (d.address?.addressLocality)  out.hq        = [d.address.addressLocality, d.address.addressCountry].filter(Boolean).join(', ');
-        const lv = d.logo?.url || (typeof d.logo === 'string' ? d.logo : null);
-        if (lv && !out.logo)             out.logo      = lv;
+        let obj = JSON.parse(m[1]);
+        if (Array.isArray(obj)) obj = obj.find(x => /Organization|Corporation|Company/i.test(x['@type'] ?? '')) ?? obj[0];
+        if (!obj) continue;
+        result.founded   ??= obj.foundingDate ? String(obj.foundingDate).slice(0, 4) : null;
+        result.employees ??= obj.numberOfEmployees?.value ? String(obj.numberOfEmployees.value) : null;
+        result.desc      ??= obj.description ?? null;
+        if (!result.hq && obj.address?.addressLocality)
+          result.hq = [obj.address.addressLocality, obj.address.addressCountry].filter(Boolean).join(', ');
+        result.logo ??= obj.logo?.url ?? (typeof obj.logo === 'string' ? obj.logo : null);
       } catch {}
     }
-    return out;
+    return result;
   }
 
-  async function scrapeWebsite(domain) {
+  async function scrapeHomepage(domain) {
     try {
       const html = await fetch('https://corsproxy.io/?' + encodeURIComponent('https://' + domain))
-                         .then(r => r.ok ? r.text() : null);
-      if (!html) return {};
-      const jld = parseJsonLd(html);
+        .then(r => r.ok ? r.text() : Promise.reject());
+      const ld = parseJsonLd(html);
       return {
-        desc:      jld.desc      || getMeta(html, 'og:description', 'description') || null,
-        logo:      jld.logo      || null,
-        founded:   jld.founded   || null,
-        hq:        jld.hq        || null,
-        employees: jld.employees || null,
+        desc:      ld.desc      ?? parseMeta(html, 'og:description', 'description') ?? null,
+        logo:      ld.logo      ?? null,
+        founded:   ld.founded   ?? null,
+        hq:        ld.hq        ?? null,
+        employees: ld.employees ?? null,
       };
     } catch { return {}; }
   }
 
-  // ── Shared helpers ───────────────────────────────────────────────
-
-  // Returns true only if the Wikipedia/registry title is about the queried company
-  function nameMatches(title, query) {
-    const t = title.toLowerCase().replace(/[^a-z0-9\s]/g, '');
-    const q = query.toLowerCase().replace(/[^a-z0-9\s]/g, '');
-    const qWords = q.split(/\s+/).filter(w => w.length > 2);
-    return t.includes(q) ||
-      (qWords.length > 0 && qWords.every(w => t.includes(w))) ||
-      t.split(/\s+/).some(w => w.length > 3 && q.includes(w));
+  // True if a Wikidata entity label matches what the user searched for.
+  // Prevents "Mastersoft" from matching "Adobe Systems" etc.
+  function labelMatchesQuery(label, q) {
+    const norm = s => s.toLowerCase().replace(/[^a-z0-9\s]/g, '').trim();
+    const t = norm(label), s = norm(q);
+    return t === s
+      || t.startsWith(s + ' ')
+      || s.split(/\s+/).filter(w => w.length > 2).every(w => t.includes(w))
+      || t.split(/\s+/).some(w => w.length > 3 && s === w);
   }
 
-  // Derive a best-guess domain from a legal company name
-  function guessDomain(companyName) {
-    const base = (companyName || '')
-      .replace(/\b(PTY\s*LTD|PVT\s*LTD|LIMITED|LTD|LLC|INC\.?|CORP\.?|CORPORATION|CO\b|PLC|GMBH|AG\b|SE\b|SARL|SRL|BV\b|NV\b|AB\b|OY\b|GROUP|HOLDINGS|SERVICES|TECHNOLOGIES|SOLUTIONS|SYSTEMS|INTERNATIONAL|GLOBAL)\b\.?/gi, '')
-      .trim().split(/\s+/)[0];
-    return (base || companyName).toLowerCase().replace(/[^a-z0-9]/g, '') + '.com';
+  // Wikidata short descriptions for companies say things like
+  // "German multinational software company" or "American technology corporation".
+  // Products and people don't contain these words.
+  const COMPANY_DESC = /\b(company|corporation|inc\b|ltd\b|llc\b|multinational|vendor|manufacturer|conglomerate|provider)\b/i;
+
+  // ─── Source 1: Wikidata entity search ────────────────────────────
+  // Uses wbsearchentities (indexed, fast) then wbgetentities for claims.
+  // Gets: name, website (P856), logo (P154), founded (P571), employees (P1128).
+  // Falls back to Wikipedia extract for the description field.
+
+  async function fetchFromWikidata(name) {
+    // 1. Search the Wikidata entity index
+    const searchRes = await fetch(
+      'https://www.wikidata.org/w/api.php?' + new URLSearchParams({
+        action: 'wbsearchentities', search: name, type: 'item',
+        language: 'en', limit: '10', format: 'json', origin: '*',
+      })
+    ).then(r => r.json());
+
+    // Accept the first result whose label matches the query AND whose
+    // Wikidata description sounds like a company (not a product, person, etc.)
+    const hit = (searchRes.search ?? []).find(r =>
+      labelMatchesQuery(r.label ?? '', name) && COMPANY_DESC.test(r.description ?? '')
+    );
+    if (!hit) return null;
+
+    // 2. Fetch full entity: claims + English Wikipedia sitelink
+    const entityRes = await fetch(
+      'https://www.wikidata.org/w/api.php?' + new URLSearchParams({
+        action: 'wbgetentities', ids: hit.id,
+        props: 'labels|descriptions|claims|sitelinks',
+        sitefilter: 'enwiki', languages: 'en',
+        format: 'json', origin: '*',
+      })
+    ).then(r => r.json());
+
+    const entity = entityRes.entities?.[hit.id];
+    if (!entity) return null;
+
+    // Extract a typed claim value from the entity
+    function claimVal(prop) {
+      const snak = entity.claims?.[prop]?.[0]?.mainsnak;
+      if (snak?.snaktype !== 'value') return null;
+      const { type, value } = snak.datavalue;
+      if (type === 'string')   return value;
+      if (type === 'time')     return value.time?.slice(1, 5) ?? null;  // "+1972-..." → "1972"
+      if (type === 'quantity') return String(value.amount).replace(/^\+/, '');
+      return null;
+    }
+
+    const website   = claimVal('P856');   // official website URL
+    const logoFile  = claimVal('P154');   // Wikimedia Commons filename
+    const founded   = claimVal('P571');   // inception year
+    const employees = claimVal('P1128'); // employee count
+
+    let domain = null;
+    try { domain = website ? new URL(website).hostname.replace(/^www\./, '') : null; } catch {}
+
+    const wikiTitle = entity.sitelinks?.enwiki?.title ?? null;
+
+    // 3. Fetch Wikipedia extract + scrape company site in parallel
+    const [wiki, scraped] = await Promise.all([
+      wikiTitle
+        ? fetch('https://en.wikipedia.org/api/rest_v1/page/summary/' + encodeURIComponent(wikiTitle))
+            .then(r => r.ok ? r.json() : null).catch(() => null)
+        : null,
+      domain ? scrapeHomepage(domain) : {},
+    ]);
+
+    const extract = wiki?.extract ?? '';
+    const desc = scraped.desc
+      ?? (extract ? (extract.length > 400 ? extract.slice(0, 397) + '…' : extract) : null)
+      ?? hit.description  // Wikidata short description as last resort
+      ?? null;
+
+    // Logo: Clearbit (best quality) → Wikimedia Commons file → Wikipedia thumbnail
+    const clearbitLogo = domain ? 'https://logo.clearbit.com/' + domain : null;
+    const commonsLogo  = logoFile
+      ? 'https://commons.wikimedia.org/wiki/Special:FilePath/' + encodeURIComponent(logoFile)
+      : null;
+    const wikiThumb = wiki?.thumbnail?.source ?? null;
+
+    return {
+      name:         entity.labels?.en?.value ?? hit.label,
+      desc,
+      logo:         clearbitLogo ?? commonsLogo ?? wikiThumb,
+      logoFallback: wikiThumb ?? commonsLogo ?? null,
+      website,
+      domain,
+      founded:      founded ?? scraped.founded ?? null,
+      hq:           scraped.hq ?? null,
+      employees:    employees ?? scraped.employees ?? null,
+      industry:     hit.description ?? null,
+      revenue:      null,
+      erp:          null,
+      tags:         null,
+    };
   }
 
-  // ── SOURCE 1: Wikipedia + Wikidata ──────────────────────────────
-  // Good for Fortune-500 and well-known vendors; validates name similarity
-  // to prevent wrong-company matches (e.g. "Mastersoft" → "Adobe").
-  const BIZ_RE = /\b(company|corporation|corp\b|inc\b|ltd\b|llc\b|software|enterprise|technologies|solutions|provider|multinational|vendor|manufacturer|conglomerate)\b/i;
+  // ─── Source 2: Google Sheet CSV ──────────────────────────────────
+  // Highest-priority override. Use for any company not found automatically.
 
-  async function fromWikipedia(query) {
+  async function fetchFromSheet(name) {
+    if (!SHEET_URL) return null;
     try {
-      const searchRes = await fetch(
-        'https://en.wikipedia.org/w/api.php?' + new URLSearchParams({
-          action: 'query', list: 'search', srsearch: query,
-          srlimit: '8', srprop: 'snippet', format: 'json', origin: '*',
-        })
-      ).then(r => r.json());
-
-      const hits = searchRes?.query?.search || [];
-      let title = null;
-      for (const h of hits) {
-        const text = h.title + ' ' + (h.snippet || '').replace(/<[^>]+>/g, '');
-        // Must look like a business AND name must actually match the query
-        if (BIZ_RE.test(text) && nameMatches(h.title, query)) { title = h.title; break; }
-      }
-      if (!title) return null;  // no name-matched business result → try next source
-
-      const [summary, propsRes] = await Promise.all([
-        fetch('https://en.wikipedia.org/api/rest_v1/page/summary/' + encodeURIComponent(title))
-          .then(r => r.json()),
-        fetch('https://en.wikipedia.org/w/api.php?' + new URLSearchParams({
-          action: 'query', prop: 'pageprops', titles: title, format: 'json', origin: '*',
-        })).then(r => r.json()),
-      ]);
-
-      if (!summary?.extract || summary.type === 'disambiguation') return null;
-
-      const qid = Object.values(propsRes?.query?.pages || {})[0]?.pageprops?.wikibase_item;
-      let website = null;
-      if (qid) {
-        const wdRes = await fetch(
-          'https://www.wikidata.org/w/api.php?' + new URLSearchParams({
-            action: 'wbgetentities', ids: qid, props: 'claims', format: 'json', origin: '*',
-          })
-        ).then(r => r.json());
-        const p856 = wdRes?.entities?.[qid]?.claims?.P856?.[0];
-        if (p856) website = p856.mainsnak?.datavalue?.value;
-      }
-
-      let domain = null;
-      if (website) {
-        try { domain = new URL(website).hostname.replace(/^www\./, ''); } catch {}
-      } else {
-        domain = guessDomain(summary.title);
-      }
-
-      const scraped = domain ? await scrapeWebsite(domain) : {};
-      const extract = summary.extract || '';
-      const wikiThumb = summary.thumbnail?.source || null;
-
-      return {
-        name:      summary.title,
-        desc:      scraped.desc || (extract.length > 400 ? extract.slice(0, 397) + '…' : extract) || null,
-        logo:      domain ? 'https://logo.clearbit.com/' + domain : wikiThumb,
-        wikiThumb,
-        website:   website || (domain ? 'https://' + domain : null),
-        domain,
-        founded:   scraped.founded   || null,
-        hq:        scraped.hq        || null,
-        employees: scraped.employees || null,
-        industry:  summary.description || null,
-        revenue: null, erp: null, tags: null,
-      };
-    } catch { return null; }
-  }
-
-  // ── SOURCE 2: OpenCorporates ─────────────────────────────────────
-  // Aggregates 130+ government company registries (Companies House, SEC,
-  // ASIC, MCA21, etc.). Works for small/regional companies not on Wikipedia.
-  async function fromOpenCorporates(query) {
-    try {
-      const apiUrl = 'https://api.opencorporates.com/v0.4/companies/search?' + new URLSearchParams({
-        q: query, format: 'json', per_page: '5',
-      });
-      const data = await fetch('https://corsproxy.io/?' + encodeURIComponent(apiUrl))
-                         .then(r => r.ok ? r.json() : null);
-
-      const hits = data?.results?.companies || [];
-      if (!hits.length) return null;
-
-      // Prefer active companies whose name matches the query
-      let best = null;
-      for (const { company: c } of hits) {
-        if (nameMatches(c.name || '', query) && c.current_status !== 'Dissolved') {
-          best = c; break;
-        }
-      }
-      // Widen: any status match
-      if (!best) for (const { company: c } of hits) {
-        if (nameMatches(c.name || '', query)) { best = c; break; }
-      }
-      if (!best) return null;
-
-      // Title-case and strip legal suffixes for display
-      const displayName = (best.name || query)
-        .replace(/\b(PTY\s*LTD|PVT\s*LTD|LIMITED|LTD|LLC|INC\.?|CORP\.?|CORPORATION|CO\b|PLC|GMBH|AG\b|SE\b|SARL|SRL|BV\b|NV\b|AB\b|OY\b)\b\.?/gi, '')
-        .trim()
-        .replace(/\b\w/g, c => c.toUpperCase())
-        .replace(/\b(Of|And|The|In|For)\b/g, w => w.toLowerCase())
-        .trim() || query;
-
-      const domain  = guessDomain(best.name || query);
-      const scraped = await scrapeWebsite(domain);
-
-      const addr = best.registered_address;
-      const hq   = addr
-        ? [addr.locality, addr.region, addr.country].filter(Boolean).join(', ')
-        : null;
-
-      return {
-        name:      displayName,
-        desc:      scraped.desc || null,
-        logo:      'https://logo.clearbit.com/' + domain,
-        wikiThumb: null,
-        website:   'https://' + domain,
-        domain,
-        founded:   best.incorporation_date ? String(best.incorporation_date).slice(0, 4) : null,
-        hq,
-        employees: null,
-        industry:  best.company_type || null,
-        revenue: null, erp: null, tags: null,
-      };
-    } catch { return null; }
-  }
-
-  // ── SOURCE 3: Google Sheet CSV override ─────────────────────────
-  async function fromSheet(query) {
-    if (!SHEET_CSV_URL) return null;
-    try {
-      const res = await fetch(SHEET_CSV_URL);
-      if (!res.ok) return null;
-      const lines   = (await res.text()).trim().split('\n');
-      const headers = lines[0].split(',').map(h => h.trim().replace(/^"|"$/g, '').toLowerCase());
-      const qIdx    = headers.indexOf('query');
-      if (qIdx === -1) return null;
-      const row = lines.slice(1)
+      const text = await fetch(SHEET_URL).then(r => r.ok ? r.text() : null);
+      if (!text) return null;
+      const [headerLine, ...dataLines] = text.trim().split('\n');
+      const cols = headerLine.split(',').map(c => c.trim().replace(/^"|"$/g, '').toLowerCase());
+      const qi   = cols.indexOf('query');
+      if (qi < 0) return null;
+      const row  = dataLines
         .map(l => l.split(',').map(c => c.trim().replace(/^"|"$/g, '')))
-        .find(r => (r[qIdx] || '').toLowerCase() === query.toLowerCase());
+        .find(r => r[qi]?.toLowerCase() === name.toLowerCase());
       if (!row) return null;
-      const get = k => { const i = headers.indexOf(k); return i >= 0 && row[i] ? row[i] : null; };
+      const col = k => { const i = cols.indexOf(k); return i >= 0 && row[i] ? row[i] : null; };
       return {
-        name: get('name'), desc: get('desc'), logo: get('logo'),
-        website: get('website'), domain: null,
-        founded: get('founded'), revenue: get('revenue'), employees: get('employees'),
-        hq: get('hq'), industry: get('industry'), erp: get('erp'),
-        tags: get('tags') ? get('tags').split('|').map(t => t.trim()).filter(Boolean) : null,
+        name:         col('name'),
+        desc:         col('desc'),
+        logo:         col('logo'),
+        logoFallback: null,
+        website:      col('website'),
+        domain:       null,
+        founded:      col('founded'),
+        revenue:      col('revenue'),
+        employees:    col('employees'),
+        hq:           col('hq'),
+        industry:     col('industry'),
+        erp:          col('erp'),
+        tags:         col('tags')?.split('|').map(t => t.trim()).filter(Boolean) ?? null,
       };
     } catch { return null; }
   }
 
-  // ── DOM helpers ──────────────────────────────────────────────────
-  function reveal(skelId, elId, value) {
-    const skel = document.getElementById(skelId);
-    const el   = document.getElementById(elId);
-    if (skel) skel.classList.add('hidden');
-    if (el)   { el.textContent = value || '—'; el.classList.remove('hidden'); }
+  // ─── DOM ─────────────────────────────────────────────────────────
+
+  function revealField(skelId, valId, text) {
+    document.getElementById(skelId)?.classList.add('hidden');
+    const el = document.getElementById(valId);
+    if (el) { el.textContent = text ?? '—'; el.classList.remove('hidden'); }
   }
 
-  // ── Render ───────────────────────────────────────────────────────
-  function render(d) {
+  function renderCard(data) {
     const img    = document.getElementById('snap-logo-img');
     const icon   = document.getElementById('snap-logo-icon');
     const logoBg = img?.parentElement;
 
-    if (d.logo && img) {
-      img.alt = d.name || '';
-      img.src = d.logo;
+    if (data.logo && img) {
+      img.alt = data.name ?? '';
+      img.src = data.logo;
       img.onload = () => {
         img.classList.remove('hidden');
         icon?.classList.add('hidden');
         logoBg?.classList.remove('animate-pulse', 'bg-border');
       };
       img.onerror = () => {
-        if (d.wikiThumb && img.src !== d.wikiThumb) {
-          img.src = d.wikiThumb;
+        if (data.logoFallback && img.src !== data.logoFallback) {
+          img.src = data.logoFallback;
         } else {
           icon?.classList.remove('hidden');
           logoBg?.classList.remove('animate-pulse', 'bg-border');
@@ -863,70 +832,64 @@
       logoBg?.classList.remove('animate-pulse', 'bg-border');
     }
 
-    if (d.name) {
-      ['company-name', 'news-company-name'].forEach(id => {
+    if (data.name) {
+      document.title = data.name + ' — ERP Search Tool';
+      for (const id of ['company-name', 'news-company-name']) {
         const el = document.getElementById(id);
-        if (el) el.textContent = d.name;
-      });
-      document.title = d.name + ' — ERP Search Tool';
+        if (el) el.textContent = data.name;
+      }
     }
 
-    reveal('snap-name-skel',      'snap-name',      d.name);
-    reveal('snap-desc-skel',      'snap-desc',      d.desc);
-    reveal('snap-industry-skel',  'snap-industry',  d.industry);
-    reveal('snap-hq-skel',        'snap-hq',        d.hq);
-    reveal('snap-employees-skel', 'snap-employees', d.employees);
-    reveal('snap-founded-skel',   'snap-founded',   d.founded);
-    reveal('snap-revenue-skel',   'snap-revenue',   d.revenue);
-    reveal('snap-erp-skel',       'snap-erp',       d.erp);
+    revealField('snap-name-skel',      'snap-name',      data.name);
+    revealField('snap-desc-skel',      'snap-desc',      data.desc);
+    revealField('snap-industry-skel',  'snap-industry',  data.industry);
+    revealField('snap-hq-skel',        'snap-hq',        data.hq);
+    revealField('snap-employees-skel', 'snap-employees', data.employees);
+    revealField('snap-founded-skel',   'snap-founded',   data.founded);
+    revealField('snap-revenue-skel',   'snap-revenue',   data.revenue);
+    revealField('snap-erp-skel',       'snap-erp',       data.erp);
 
-    if (d.website) {
+    if (data.website) {
       const link = document.getElementById('snap-website');
       const row  = document.getElementById('snap-website-row');
       if (link && row) {
-        link.href = d.website;
-        try { link.textContent = new URL(d.website).hostname.replace(/^www\./, ''); }
-        catch { link.textContent = d.website; }
+        link.href = data.website;
+        try { link.textContent = new URL(data.website).hostname.replace(/^www\./, ''); }
+        catch { link.textContent = data.website; }
         row.style.display = 'flex';
       }
     }
 
-    const tagSkel = document.getElementById('snap-tags-skel');
-    const tagBox  = document.getElementById('snap-tags');
-    if (d.tags?.length && tagBox) {
-      tagBox.innerHTML = d.tags.map(t =>
-        `<span class="px-2 py-0.5 rounded-full bg-surface-2 border border-border text-label-sm text-ink-muted">${t}</span>`
+    document.getElementById('snap-tags-skel')?.classList.add('hidden');
+    const tagBox = document.getElementById('snap-tags');
+    if (data.tags?.length && tagBox) {
+      tagBox.innerHTML = data.tags.map(tag =>
+        `<span class="px-2 py-0.5 rounded-full bg-surface-2 border border-border text-label-sm text-ink-muted">${tag}</span>`
       ).join('');
       tagBox.style.display = 'flex';
-      if (tagSkel) tagSkel.classList.add('hidden');
-    } else {
-      if (tagSkel) tagSkel.classList.add('hidden');
     }
   }
 
-  // ── No-data state ────────────────────────────────────────────────
-  function renderEmpty(query) {
-    ['snap-name-skel','snap-desc-skel','snap-industry-skel','snap-hq-skel',
-     'snap-employees-skel','snap-founded-skel','snap-revenue-skel','snap-erp-skel',
-     'snap-tags-skel'].forEach(id => { document.getElementById(id)?.classList.add('hidden'); });
+  function renderNotFound() {
+    for (const id of ['snap-name-skel', 'snap-desc-skel', 'snap-industry-skel', 'snap-hq-skel',
+                       'snap-employees-skel', 'snap-founded-skel', 'snap-revenue-skel',
+                       'snap-erp-skel', 'snap-tags-skel']) {
+      document.getElementById(id)?.classList.add('hidden');
+    }
     document.getElementById('snap-logo-icon')?.classList.remove('hidden');
     document.getElementById('snap-logo-img')?.parentElement?.classList.remove('animate-pulse', 'bg-border');
     const msg = document.getElementById('snap-no-data-msg');
-    if (msg) msg.textContent = '"' + query + '" not found. Add it to the Google Sheet to populate this card.';
+    if (msg) msg.textContent = `"${query}" wasn't found automatically. Add it to the Google Sheet to populate this card.`;
     document.getElementById('snap-no-data')?.classList.remove('hidden');
   }
 
-  // ── Entry point ──────────────────────────────────────────────────
-  // Priority: manual Sheet → Wikipedia (known vendors) → OpenCorporates (govt registries)
-  async function load() {
-    try {
-      const data = (await fromSheet(q)) || (await fromWikipedia(q)) || (await fromOpenCorporates(q));
-      if (data) render(data);
-      else renderEmpty(q);
-    } catch { renderEmpty(q); }
-  }
+  // ─── Run ─────────────────────────────────────────────────────────
+  // Sheet takes priority (user-curated). Wikidata covers everything else.
 
-  load();
+  (async () => {
+    const data = (await fetchFromSheet(query)) ?? (await fetchFromWikidata(query));
+    if (data) renderCard(data); else renderNotFound();
+  })().catch(() => renderNotFound());
 })();
 </script>
 </body>
