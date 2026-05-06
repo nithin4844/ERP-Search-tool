@@ -255,33 +255,100 @@
         </div>
       </div>
 
-      <!-- News (full width) -->
-      <section class="bg-surface border border-border rounded-lg shadow-ambient p-card hover:border-border-strong transition-colors">
-        <div class="flex items-center justify-between border-b border-border pb-3 mb-4">
-          <h3 class="text-headline-sm text-ink flex items-center gap-2">
-            <span class="material-symbols-outlined text-primary">newspaper</span>
-            Latest News:
-            <span id="news-company-name" class="text-primary"></span>
-          </h3>
-          <span class="text-label-sm uppercase tracking-wider text-ink-faint">Powered by Google</span>
-        </div>
+      <!-- News (sized to content) + Company Snapshot side-by-side -->
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-4">
 
-        <!--
-          Standard Google Programmable Search element with the search box.
-          - data-queryParameterName="q": CSE reads ?q=... from the URL on load.
-          - data-autoSearchOnLoad="true": runs the search automatically.
-          The result wrapper height is capped via CSS so the page doesn't grow
-          arbitrarily — results scroll internally past the cap.
-        -->
-        <div id="news-results" class="gcse-search"
-             data-queryParameterName="q"
-             data-autoSearchOnLoad="true"></div>
+        <!-- News card: left, ~2/3 width on desktop -->
+        <section class="lg:col-span-8 bg-surface border border-border rounded-lg shadow-ambient p-card hover:border-border-strong transition-colors">
+          <div class="flex items-center justify-between border-b border-border pb-3 mb-4">
+            <h3 class="text-headline-sm text-ink flex items-center gap-2">
+              <span class="material-symbols-outlined text-primary">newspaper</span>
+              Latest News:
+              <span id="news-company-name" class="text-primary"></span>
+            </h3>
+            <span class="text-label-sm uppercase tracking-wider text-ink-faint">Powered by Google</span>
+          </div>
 
-        <p id="news-fallback" class="hidden mt-4 text-body-sm text-ink-muted">
-          Results not loading? Make sure you opened this page over <code>http://</code> (not <code>file://</code>),
-          and that no extension is blocking <code>cse.google.com</code>.
-        </p>
-      </section>
+          <!--
+            Google Programmable Search.
+            - data-queryParameterName="q": CSE reads ?q=... from the URL on load.
+            - data-autoSearchOnLoad="true": runs the search automatically.
+            Results pane is height-capped via CSS so it scrolls internally.
+          -->
+          <div id="news-results" class="gcse-search"
+               data-queryParameterName="q"
+               data-autoSearchOnLoad="true"></div>
+
+          <p id="news-fallback" class="hidden mt-4 text-body-sm text-ink-muted">
+            Results not loading? Make sure you opened this page over <code>http://</code> (not <code>file://</code>),
+            and that no extension is blocking <code>cse.google.com</code>.
+          </p>
+        </section>
+
+        <!-- Company Snapshot: right, ~1/3 width on desktop. Skeleton placeholder. -->
+        <section class="lg:col-span-4 bg-surface border border-border rounded-lg shadow-ambient p-card hover:border-border-strong transition-colors flex flex-col">
+          <div class="flex items-center justify-between border-b border-border pb-3 mb-4">
+            <h3 class="text-headline-sm text-ink flex items-center gap-2">
+              <span class="material-symbols-outlined text-primary">domain</span>
+              Company Snapshot
+            </h3>
+            <button class="w-7 h-7 rounded hover:bg-surface-2 text-ink-faint flex items-center justify-center"><span class="material-symbols-outlined" style="font-size:18px;">more_vert</span></button>
+          </div>
+
+          <!-- Logo + name -->
+          <div class="flex items-center gap-3 mb-4">
+            <div class="w-12 h-12 rounded-lg bg-surface-2 border border-border flex items-center justify-center">
+              <span class="material-symbols-outlined text-ink-faint">business</span>
+            </div>
+            <div class="flex-1 space-y-2">
+              <div class="h-4 bg-surface-2 rounded w-2/3"></div>
+              <div class="h-3 bg-surface-2 rounded w-1/2"></div>
+            </div>
+          </div>
+
+          <!-- Quick facts -->
+          <dl class="grid grid-cols-2 gap-3 mb-4">
+            <div>
+              <dt class="text-label-sm uppercase tracking-wider text-ink-faint mb-1">Industry</dt>
+              <dd class="h-4 bg-surface-2 rounded w-3/4"></dd>
+            </div>
+            <div>
+              <dt class="text-label-sm uppercase tracking-wider text-ink-faint mb-1">HQ</dt>
+              <dd class="h-4 bg-surface-2 rounded w-2/3"></dd>
+            </div>
+            <div>
+              <dt class="text-label-sm uppercase tracking-wider text-ink-faint mb-1">Employees</dt>
+              <dd class="h-4 bg-surface-2 rounded w-1/2"></dd>
+            </div>
+            <div>
+              <dt class="text-label-sm uppercase tracking-wider text-ink-faint mb-1">Founded</dt>
+              <dd class="h-4 bg-surface-2 rounded w-1/3"></dd>
+            </div>
+            <div>
+              <dt class="text-label-sm uppercase tracking-wider text-ink-faint mb-1">Revenue</dt>
+              <dd class="h-4 bg-surface-2 rounded w-2/3"></dd>
+            </div>
+            <div>
+              <dt class="text-label-sm uppercase tracking-wider text-ink-faint mb-1">ERP Stack</dt>
+              <dd class="h-4 bg-surface-2 rounded w-3/4"></dd>
+            </div>
+          </dl>
+
+          <!-- Tags placeholder -->
+          <div class="flex flex-wrap gap-2 mb-4">
+            <span class="px-2 py-1 rounded bg-surface-2 border border-border h-6 w-16"></span>
+            <span class="px-2 py-1 rounded bg-surface-2 border border-border h-6 w-20"></span>
+            <span class="px-2 py-1 rounded bg-surface-2 border border-border h-6 w-14"></span>
+          </div>
+
+          <!-- CTA -->
+          <button class="mt-auto h-9 inline-flex items-center justify-center gap-2 bg-surface-2 hover:bg-bg border border-border text-ink-muted text-label-md rounded transition">
+            <span class="material-symbols-outlined" style="font-size:16px;">open_in_new</span>
+            View full profile
+          </button>
+        </section>
+
+      </div>
 
       <!-- 2x2 placeholder grid -->
       <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
