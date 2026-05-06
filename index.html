@@ -78,15 +78,31 @@
   body { font-family: 'Inter', system-ui, sans-serif; }
   .material-symbols-outlined { font-size: 20px; vertical-align: middle; }
 
-  /* CSE injects an overlay/modal at body level even when we only ask for inline
-     results. Suppress it so the news stays confined to the card. */
+  /* CSE renders results inside a positioned "overlay" wrapper even for
+     searchresults-only. Force it back into document flow so results render
+     inline inside the news card. Also hide the modal backdrop / close button
+     that only make sense in popup mode. */
+  #news-results .gsc-results-wrapper-overlay {
+      position: static !important;
+      width: 100% !important;
+      height: auto !important;
+      max-height: none !important;
+      min-height: 0 !important;
+      background: transparent !important;
+      box-shadow: none !important;
+      border: none !important;
+      padding: 0 !important;
+      margin: 0 !important;
+      overflow: visible !important;
+      z-index: auto !important;
+      transform: none !important;
+      visibility: visible !important;
+      opacity: 1 !important;
+  }
   .gsc-modal-background-image,
-  .gsc-modal-background-image-visible,
-  .gsc-results-popup-wrapper,
-  .gsc-results-wrapper-overlay,
-  .gsc-results-wrapper-visible,
-  .gsc-resultsbox-popup,
-  .gsc-resultsbox-visible { display: none !important; }
+  .gsc-modal-background-image-visible { display: none !important; }
+  #news-results .gsc-results-close-btn,
+  #news-results .gsc-results-close-btn-visible { display: none !important; }
 
   /* Re-skin Google CSE so it inherits the design system */
   #news-results .gsc-control-cse,
