@@ -646,17 +646,6 @@
     return cut > 60 ? text.slice(0, cut + 1) : text.slice(0, max - 1) + '…';
   }
 
-  // Returns true when text looks like a marketing tagline rather than a factual description:
-  // too short, ends with !, or is a pure keyword list (no spaces past 60 chars).
-  const MARKETING_WORDS = /\b(innovative|cutting.?edge|world.?class|best.?in.?class|revolutionary|next.?gen|game.?changing|transform your|empower your|unleash|seamless(ly)?)\b/i;
-  function isMarketingCopy(text) {
-    if (!text) return true;
-    if (text.length < 60) return true;
-    if (text.trimEnd().endsWith('!')) return true;
-    if (MARKETING_WORDS.test(text)) return true;
-    return false;
-  }
-
   async function scrapeHomepage(domain) {
     try {
       const html = await fetch('https://corsproxy.io/?' + encodeURIComponent('https://' + domain))
@@ -677,11 +666,10 @@
 
       return {
         name:      ld.name ?? parseMeta(html, 'og:site_name') ?? titleName ?? null,
-        desc:      (() => {
-          const raw = trimDesc(ld.desc ?? parseMeta(html, 'og:description', 'description') ?? null);
-          return isMarketingCopy(raw) ? null : raw;
-        })(),
-        logo:      ld.logo ?? null,   // og:image is a page hero, not a logo — skip it
+        // Description is intentionally omitted: company-written og:description and
+        // JSON-LD descriptions are always self-promotional. Only Wikipedia/Wikidata
+        // (neutral, third-party) text is shown in the card.
+        logo:      ld.logo ?? null,
         founded,
         hq:        ld.hq ?? null,
         employees,
@@ -762,11 +750,10 @@
 
     const scraped = await scrapeHomepage(domain);
     const resolvedName = scraped.name ?? best.name;
-    const resolvedDesc = scraped.desc ?? null;
 
     return {
       name:      resolvedName,
-      desc:      resolvedDesc,
+      desc:      null,   // only Wikipedia/Wikidata (neutral sources) populate description
       logo:      'https://logo.clearbit.com/' + domain,
       logoFallback: scraped.logo ?? null,
       website:   'https://' + domain,
@@ -776,7 +763,7 @@
       employees: scraped.employees ?? null,
       industry:  null,
       revenue:   null,
-      erp:       inferErp(resolvedName, resolvedDesc),
+      erp:       inferErp(resolvedName, null),
       tags:      null,
     };
   }
