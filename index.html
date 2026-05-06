@@ -78,9 +78,7 @@
   body { font-family: 'Inter', system-ui, sans-serif; }
   .material-symbols-outlined { font-size: 20px; vertical-align: middle; }
 
-  /* Force every CSE wrapper, table, and result row to fill the card width.
-     CSE's own stylesheet sets fixed/auto widths on tables and inner cells,
-     which leaves a large white gap on the right of the news card by default. */
+  /* Outer wrappers fill the card width so results extend edge-to-edge. */
   #news-results,
   #news-results .gsc-control-cse,
   #news-results .gsc-control-wrapper-cse,
@@ -91,9 +89,6 @@
   #news-results .gsc-wrapper,
   #news-results .gsc-resultsRoot,
   #news-results .gsc-results,
-  #news-results .gsc-input-box,
-  #news-results form.gsc-search-box,
-  #news-results table.gsc-search-box,
   #news-results .gs-result,
   #news-results .gs-webResult,
   #news-results .gsc-result,
@@ -108,9 +103,20 @@
       max-width: 100% !important;
       box-sizing: border-box !important;
   }
-  /* The search box's td cells default to fixed widths; let them flex */
+
+  /* The search box, however, should look like a normal-sized search input —
+     not stretched across the whole card with a sea of empty space. Cap it. */
+  #news-results form.gsc-search-box,
+  #news-results table.gsc-search-box {
+      width: 100% !important;
+      max-width: 420px !important;
+      margin: 0 0 12px 0 !important;
+  }
+  #news-results .gsc-input-box { width: 100% !important; box-sizing: border-box !important; }
   #news-results table.gsc-search-box td.gsc-input { width: auto !important; }
-  /* Result thumbnail cell: keep it sized; the snippet cell takes the rest */
+
+  /* Result rows: thumbnail keeps its natural size on the right;
+     snippet cell flexes to fill the rest of the row. */
   #news-results table.gsc-table-result { table-layout: auto !important; }
   #news-results td.gsc-table-cell-thumbnail,
   #news-results td.gsc-thumbnail { width: 1% !important; white-space: nowrap; }
