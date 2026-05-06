@@ -592,114 +592,109 @@
   })();
 </script>
 
-<!-- ── Company Snapshot data: Wikidata (primary) + Google Sheets CSV (curated override) ── -->
+<!-- ── Company Snapshot: DuckDuckGo search + company website scraping + Google Sheets override ── -->
 <script>
 (function () {
   const q = (new URLSearchParams(location.search).get('q') || '').trim();
-  if (!q) return; // Only runs on the dashboard view
+  if (!q) return;
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // CONFIGURATION
-  // To support companies not in Wikidata (e.g. Masssoft), create a Google Sheet
-  // with these columns (first row = headers, exact names):
-  //   query | name | desc | industry | hq | employees | founded | revenue | erp | website | domain | tags
-  // Then: File → Share → Publish to web → choose "Comma-separated values (.csv)"
-  // Paste the published CSV URL below.
+  // ── CONFIGURATION ───────────────────────────────────────────────
+  // For companies DuckDuckGo can't find (e.g. Masssoft), create a Google Sheet
+  // with these column headers (row 1, exact names):
+  //   query | name | desc | industry | hq | employees | founded | revenue | erp | website | logo | tags
+  // File → Share → Publish to web → CSV format. Paste the URL below.
   const SHEET_CSV_URL = '';
-  // ─────────────────────────────────────────────────────────────────────────
 
-  // ── Wikidata API helpers ────────────────────────────────────────
-  const WD = 'https://www.wikidata.org/w/api.php';
-
-  function wdGet(params) {
-    const url = WD + '?' + new URLSearchParams({ format: 'json', origin: '*', ...params });
-    return fetch(url).then(r => r.ok ? r.json() : null).catch(() => null);
-  }
-
-  const strVal  = (cl, p) => cl[p]?.[0]?.mainsnak?.datavalue?.value ?? null;
-  const yearVal = (cl, p) => { const t = cl[p]?.[0]?.mainsnak?.datavalue?.value?.time; return t ? t.slice(1, 5) : null; };
-  const itemId  = (cl, p) => cl[p]?.[0]?.mainsnak?.datavalue?.value?.id ?? null;
-
-  function fmtN(raw) {
-    const n = Math.abs(+raw);
-    if (n >= 1e9) return (n / 1e9).toFixed(1) + 'B';
-    if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
-    if (n >= 1e3) return Math.round(n / 1e3) + 'K';
-    return n.toLocaleString();
-  }
-
-  function quantityVal(cl, p) {
-    const amt = cl[p]?.[0]?.mainsnak?.datavalue?.value?.amount;
-    return amt ? fmtN(amt) : null;
-  }
-
-  function revenueVal(cl) {
-    const arr = (cl.P2139 || []).filter(c => c.mainsnak?.datavalue?.value?.amount);
-    if (!arr.length) return null;
-    // Pick the entry with the most recent point-in-time qualifier (P585)
-    arr.sort((a, b) => {
-      const ta = a.qualifiers?.P585?.[0]?.datavalue?.value?.time || '';
-      const tb = b.qualifiers?.P585?.[0]?.datavalue?.value?.time || '';
-      return tb.localeCompare(ta);
-    });
-    const v  = arr[0].mainsnak.datavalue.value;
-    const yr = arr[0].qualifiers?.P585?.[0]?.datavalue?.value?.time?.slice(1, 5);
-    return yr ? fmtN(v.amount) + ' (' + yr + ')' : fmtN(v.amount);
-  }
-
-  // ── Fetch from Wikidata ─────────────────────────────────────────
-  async function fromWikidata(query) {
-    const sd = await wdGet({ action: 'wbsearchentities', search: query, language: 'en', type: 'item', limit: 10 });
-    if (!sd?.search?.length) return null;
-
-    // Prefer results whose description suggests a business entity
-    const bizWords = ['company', 'corporation', 'enterprise', 'software', 'technology', 'solutions',
-                      'business', 'group', 'limited', 'manufacturer', 'vendor', 'provider', 'multinational'];
-    const match = sd.search.find(r => bizWords.some(w => (r.description || '').toLowerCase().includes(w)))
-                  || sd.search[0];
-    if (!match) return null;
-
-    const dd = await wdGet({ action: 'wbgetentities', ids: match.id, props: 'labels|descriptions|claims', languages: 'en' });
-    const e  = dd?.entities?.[match.id];
-    if (!e) return null;
-
-    const cl        = e.claims || {};
-    const name      = e.labels?.en?.value || match.label;
-    const desc      = e.descriptions?.en?.value || '';
-    const website   = strVal(cl, 'P856');
-    const founded   = yearVal(cl, 'P571');
-    const revenue   = revenueVal(cl);
-    const employees = quantityVal(cl, 'P1128');
-
-    // Gather item IDs that need a second label-fetch
-    const hqId      = itemId(cl, 'P159');
-    const indId     = itemId(cl, 'P452');
-    const ctryId    = itemId(cl, 'P17');
-    // Products (P1056) → ERP / Products field; take up to 3
-    const prodIds   = (cl.P1056 || []).slice(0, 3)
-                        .map(c => c.mainsnak?.datavalue?.value?.id).filter(Boolean);
-    const refIds    = [...new Set([hqId, indId, ctryId, ...prodIds].filter(Boolean))];
-
-    let hq = null, industry = null, erp = null;
-    if (refIds.length) {
-      const ld = await wdGet({ action: 'wbgetentities', ids: refIds.join('|'), props: 'labels', languages: 'en' });
-      if (ld?.entities) {
-        const lbl  = id => ld.entities[id]?.labels?.en?.value ?? null;
-        const city = hqId  ? lbl(hqId)  : null;
-        const ctry = ctryId ? lbl(ctryId) : null;
-        hq       = [city, ctry].filter(Boolean).join(', ') || null;
-        industry = indId ? lbl(indId) : null;
-        erp      = prodIds.map(lbl).filter(Boolean).join(', ') || null;
-      }
+  // ── Website scraping via CORS proxy ─────────────────────────────
+  function getMeta(html, ...attrs) {
+    for (const a of attrs) {
+      const re  = new RegExp('<meta[^>]+(?:name|property)=["\']' + a + '["\'][^>]+content=["\']([^"\']+)["\']', 'i');
+      const re2 = new RegExp('<meta[^>]+content=["\']([^"\']+)["\'][^>]+(?:name|property)=["\']' + a + '["\']', 'i');
+      const m   = html.match(re) || html.match(re2);
+      if (m?.[1]) return m[1];
     }
-
-    let domain = null;
-    if (website) { try { domain = new URL(website).hostname.replace(/^www\./, ''); } catch {} }
-
-    return { name, desc, website, domain, founded, revenue, employees, hq, industry, erp, tags: null };
+    return null;
   }
 
-  // ── Fetch from Google Sheet CSV ─────────────────────────────────
+  function parseJsonLd(html) {
+    const out = {};
+    const re  = /<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
+    let m;
+    while ((m = re.exec(html)) !== null) {
+      try {
+        let d = JSON.parse(m[1]);
+        if (Array.isArray(d)) d = d.find(x => /Organization|Corporation|Company/i.test(x['@type'] || '')) || d[0];
+        if (!d) continue;
+        if (d.foundingDate)               out.founded   = String(d.foundingDate).slice(0, 4);
+        if (d.numberOfEmployees?.value)   out.employees = String(d.numberOfEmployees.value);
+        if (d.description && !out.desc)   out.desc      = d.description;
+        if (d.address?.addressLocality)   out.hq        = [d.address.addressLocality, d.address.addressCountry].filter(Boolean).join(', ');
+        const logoVal = d.logo?.url || (typeof d.logo === 'string' ? d.logo : null);
+        if (logoVal && !out.logo)         out.logo      = logoVal;
+      } catch {}
+    }
+    return out;
+  }
+
+  async function scrapeWebsite(domain) {
+    try {
+      const html = await fetch('https://corsproxy.io/?' + encodeURIComponent('https://' + domain))
+                         .then(r => r.ok ? r.text() : null);
+      if (!html) return {};
+      const jld = parseJsonLd(html);
+      return {
+        desc:      jld.desc      || getMeta(html, 'og:description', 'description') || null,
+        logo:      jld.logo      || getMeta(html, 'og:image', 'twitter:image')     || null,
+        founded:   jld.founded   || null,
+        hq:        jld.hq        || null,
+        employees: jld.employees || null,
+      };
+    } catch { return {}; }
+  }
+
+  // ── DuckDuckGo Instant Answer ────────────────────────────────────
+  const BIZ_RE = /\b(company|corporation|inc\b|ltd\b|software|enterprise|group|technologies|solutions|vendor|provider|multinational)\b/i;
+
+  async function fromDDG(query) {
+    // Try bare query first; if result looks non-business, retry with context suffixes
+    for (const suffix of ['', ' company', ' software', ' ERP', ' Inc']) {
+      try {
+        const url = 'https://api.duckduckgo.com/?q=' + encodeURIComponent(query + suffix)
+                  + '&format=json&no_redirect=1&no_html=1&skip_disambig=1';
+        const d = await fetch(url).then(r => r.json());
+        if (!d?.Heading) continue;
+
+        const abstract = d.AbstractText || '';
+        // Must have OfficialSite or the abstract must sound like a business
+        if (!d.OfficialSite && !BIZ_RE.test(abstract)) continue;
+
+        const website = d.OfficialSite || null;
+        let domain = null;
+        if (website) { try { domain = new URL(website).hostname.replace(/^www\./, ''); } catch {} }
+
+        const scraped = domain ? await scrapeWebsite(domain) : {};
+        const ddgLogo = d.Image ? 'https://duckduckgo.com' + d.Image : null;
+
+        return {
+          name:      d.Heading,
+          desc:      scraped.desc || (abstract ? (abstract.length > 350 ? abstract.slice(0, 347) + '…' : abstract) : null),
+          logo:      scraped.logo || ddgLogo,
+          website,
+          domain,
+          founded:   scraped.founded   || null,
+          hq:        scraped.hq        || null,
+          employees: scraped.employees || null,
+          industry:  null,
+          revenue:   null,
+          erp:       null,
+          tags:      null,
+        };
+      } catch { continue; }
+    }
+    return null;
+  }
+
+  // ── Google Sheet CSV (first-priority override) ───────────────────
   async function fromSheet(query) {
     if (!SHEET_CSV_URL) return null;
     try {
@@ -709,12 +704,14 @@
       const headers = lines[0].split(',').map(h => h.trim().replace(/^"|"$/g, '').toLowerCase());
       const qIdx    = headers.indexOf('query');
       if (qIdx === -1) return null;
-      const row = lines.slice(1).map(l => l.split(',').map(c => c.trim().replace(/^"|"$/g, '')))
-                       .find(r => (r[qIdx] || '').toLowerCase() === query.toLowerCase());
+      const row = lines.slice(1)
+        .map(l => l.split(',').map(c => c.trim().replace(/^"|"$/g, '')))
+        .find(r => (r[qIdx] || '').toLowerCase() === query.toLowerCase());
       if (!row) return null;
-      const get = key => { const i = headers.indexOf(key); return i >= 0 && row[i] ? row[i] : null; };
+      const get = k => { const i = headers.indexOf(k); return i >= 0 && row[i] ? row[i] : null; };
       return {
-        name: get('name'), desc: get('desc'), website: get('website'), domain: get('domain'),
+        name: get('name'), desc: get('desc'), logo: get('logo'),
+        website: get('website'), domain: get('domain'),
         founded: get('founded'), revenue: get('revenue'), employees: get('employees'),
         hq: get('hq'), industry: get('industry'), erp: get('erp'),
         tags: get('tags') ? get('tags').split('|').map(t => t.trim()).filter(Boolean) : null,
@@ -722,47 +719,39 @@
     } catch { return null; }
   }
 
-  // ── DOM helpers ─────────────────────────────────────────────────
+  // ── DOM helper ──────────────────────────────────────────────────
   function reveal(skelId, ddId, value) {
-    if (!value) return false;
+    if (!value) return;
     const skel = document.getElementById(skelId);
     const dd   = document.getElementById(ddId);
     if (skel) skel.classList.add('hidden');
     if (dd)   { dd.textContent = value; dd.classList.remove('hidden'); }
-    return true;
   }
 
-  // ── Render snapshot card ────────────────────────────────────────
+  // ── Render ──────────────────────────────────────────────────────
   function render(d) {
-    // Clearbit logo (graceful: icon stays if image 404s)
-    if (d.domain) {
-      const img  = document.getElementById('snap-logo-img');
-      const icon = document.getElementById('snap-logo-icon');
-      if (img) {
-        img.alt = d.name || '';
-        img.src = 'https://logo.clearbit.com/' + d.domain;
-        img.onload  = () => {
-          img.classList.remove('hidden');
-          icon?.classList.add('hidden');
-          img.parentElement?.classList.remove('animate-pulse', 'bg-border');
-        };
-        img.onerror = () => {
-          icon?.classList.remove('hidden');
-          img.parentElement?.classList.remove('animate-pulse', 'bg-border');
-        };
-      }
+    const img    = document.getElementById('snap-logo-img');
+    const icon   = document.getElementById('snap-logo-icon');
+    const logoBg = img?.parentElement;
+
+    if (d.logo && img) {
+      img.alt = d.name || '';
+      img.src = d.logo;
+      img.onload  = () => { img.classList.remove('hidden'); icon?.classList.add('hidden'); logoBg?.classList.remove('animate-pulse','bg-border'); };
+      img.onerror = () => { icon?.classList.remove('hidden'); logoBg?.classList.remove('animate-pulse','bg-border'); };
+    } else {
+      icon?.classList.remove('hidden');
+      logoBg?.classList.remove('animate-pulse','bg-border');
     }
 
-    // Update page headline with canonical company name
     if (d.name) {
-      ['company-name', 'news-company-name'].forEach(id => {
+      ['company-name','news-company-name'].forEach(id => {
         const el = document.getElementById(id);
         if (el) el.textContent = d.name;
       });
       document.title = d.name + ' — ERP Search Tool';
     }
 
-    // Card fields
     reveal('snap-name-skel',      'snap-name',      d.name);
     reveal('snap-desc-skel',      'snap-desc',      d.desc);
     reveal('snap-industry-skel',  'snap-industry',  d.industry);
@@ -772,7 +761,6 @@
     reveal('snap-revenue-skel',   'snap-revenue',   d.revenue);
     reveal('snap-erp-skel',       'snap-erp',       d.erp);
 
-    // Website link
     if (d.website) {
       const link = document.getElementById('snap-website');
       const row  = document.getElementById('snap-website-row');
@@ -784,7 +772,6 @@
       }
     }
 
-    // Tags (pipe-delimited in sheet: "ERP|Cloud|SaaS")
     const tagSkel = document.getElementById('snap-tags-skel');
     const tagBox  = document.getElementById('snap-tags');
     if (d.tags?.length && tagBox) {
@@ -794,42 +781,29 @@
       tagBox.style.display = 'flex';
       if (tagSkel) tagSkel.classList.add('hidden');
     } else if (d.name) {
-      // Data loaded but no tags — hide skeleton so it doesn't look mismatched
       if (tagSkel) tagSkel.classList.add('hidden');
     }
   }
 
-  // ── No-data fallback ────────────────────────────────────────────
+  // ── No-data state ───────────────────────────────────────────────
   function renderEmpty(query) {
-    // Hide all pulsing skeletons
     ['snap-name-skel','snap-desc-skel','snap-industry-skel','snap-hq-skel',
      'snap-employees-skel','snap-founded-skel','snap-revenue-skel','snap-erp-skel',
-     'snap-tags-skel'].forEach(id => {
-      const el = document.getElementById(id);
-      if (el) el.classList.add('hidden');
-    });
-    // Un-hide the logo icon so the card isn't completely blank
-    const icon = document.getElementById('snap-logo-icon');
-    if (icon) icon.classList.remove('hidden');
-    // Remove pulse from logo placeholder
-    const logoBg = document.getElementById('snap-logo-img')?.parentElement;
-    if (logoBg) logoBg.classList.remove('animate-pulse', 'bg-border');
-    // Show no-data message
-    const noData = document.getElementById('snap-no-data');
-    const msg    = document.getElementById('snap-no-data-msg');
-    if (msg) msg.textContent = `"${query}" not found in database.`;
-    if (noData) noData.classList.remove('hidden');
+     'snap-tags-skel'].forEach(id => { document.getElementById(id)?.classList.add('hidden'); });
+    document.getElementById('snap-logo-icon')?.classList.remove('hidden');
+    document.getElementById('snap-logo-img')?.parentElement?.classList.remove('animate-pulse','bg-border');
+    const msg = document.getElementById('snap-no-data-msg');
+    if (msg) msg.textContent = '"' + query + '" not found. Add it to the Google Sheet to populate this card.';
+    document.getElementById('snap-no-data')?.classList.remove('hidden');
   }
 
   // ── Entry point ─────────────────────────────────────────────────
   async function load() {
     try {
-      const data = (await fromSheet(q)) || (await fromWikidata(q));
+      const data = (await fromSheet(q)) || (await fromDDG(q));
       if (data) render(data);
       else renderEmpty(q);
-    } catch (err) {
-      renderEmpty(q);
-    }
+    } catch { renderEmpty(q); }
   }
 
   load();
