@@ -602,10 +602,10 @@
 
   // For companies not found automatically, publish a Google Sheet as CSV.
   // Columns (row 1 header): query | name | desc | industry | hq | employees | founded | revenue | erp | website | logo | tags
-  // File → Share → Publish to web → CSV. Paste the URL here.
+  // File → Share → Publish to web → CSV. Paste URL here.
   const SHEET_URL = '';
 
-  // ─── Helpers ─────────────────────────────────────────────────────
+  // ─── Shared utilities ─────────────────────────────────────────────
 
   function parseMeta(html, ...names) {
     for (const name of names) {
@@ -619,23 +619,24 @@
   }
 
   function parseJsonLd(html) {
-    const result = {};
-    const re = /<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
+    const out = {};
+    const re  = /<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
     let m;
     while ((m = re.exec(html))) {
       try {
         let obj = JSON.parse(m[1]);
         if (Array.isArray(obj)) obj = obj.find(x => /Organization|Corporation|Company/i.test(x['@type'] ?? '')) ?? obj[0];
         if (!obj) continue;
-        result.founded   ??= obj.foundingDate ? String(obj.foundingDate).slice(0, 4) : null;
-        result.employees ??= obj.numberOfEmployees?.value ? String(obj.numberOfEmployees.value) : null;
-        result.desc      ??= obj.description ?? null;
-        if (!result.hq && obj.address?.addressLocality)
-          result.hq = [obj.address.addressLocality, obj.address.addressCountry].filter(Boolean).join(', ');
-        result.logo ??= obj.logo?.url ?? (typeof obj.logo === 'string' ? obj.logo : null);
+        out.name      ??= obj.name ?? null;
+        out.founded   ??= obj.foundingDate ? String(obj.foundingDate).slice(0, 4) : null;
+        out.employees ??= obj.numberOfEmployees?.value ? String(obj.numberOfEmployees.value) : null;
+        out.desc      ??= obj.description ?? null;
+        out.logo      ??= obj.logo?.url ?? (typeof obj.logo === 'string' ? obj.logo : null);
+        if (!out.hq && obj.address?.addressLocality)
+          out.hq = [obj.address.addressLocality, obj.address.addressCountry].filter(Boolean).join(', ');
       } catch {}
     }
-    return result;
+    return out;
   }
 
   async function scrapeHomepage(domain) {
@@ -643,9 +644,13 @@
       const html = await fetch('https://corsproxy.io/?' + encodeURIComponent('https://' + domain))
         .then(r => r.ok ? r.text() : Promise.reject());
       const ld = parseJsonLd(html);
+      // Extract company name from JSON-LD → og:site_name → <title>
+      const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
+      const titleName  = titleMatch ? titleMatch[1].split(/[|\-–—•]/)[0].trim() : null;
       return {
-        desc:      ld.desc      ?? parseMeta(html, 'og:description', 'description') ?? null,
-        logo:      ld.logo      ?? null,
+        name:      ld.name ?? parseMeta(html, 'og:site_name') ?? titleName ?? null,
+        desc:      ld.desc ?? parseMeta(html, 'og:description', 'description') ?? null,
+        logo:      ld.logo ?? parseMeta(html, 'og:image') ?? null,
         founded:   ld.founded   ?? null,
         hq:        ld.hq        ?? null,
         employees: ld.employees ?? null,
@@ -653,44 +658,73 @@
     } catch { return {}; }
   }
 
-  // True if a Wikidata entity label matches what the user searched for.
-  // Prevents "Mastersoft" from matching "Adobe Systems" etc.
+  // Returns true only if label is actually about the queried company
   function labelMatchesQuery(label, q) {
-    const norm = s => s.toLowerCase().replace(/[^a-z0-9\s]/g, '').trim();
+    const norm = s => s.toLowerCase().replace(/[^a-z0-9]/g, '');
     const t = norm(label), s = norm(q);
-    return t === s
-      || t.startsWith(s + ' ')
-      || s.split(/\s+/).filter(w => w.length > 2).every(w => t.includes(w))
-      || t.split(/\s+/).some(w => w.length > 3 && s === w);
+    return t === s || t.startsWith(s) || s.startsWith(t)
+      || q.toLowerCase().split(/\s+/).filter(w => w.length > 2).every(w => t.includes(w));
   }
 
-  // Wikidata short descriptions for companies say things like
-  // "German multinational software company" or "American technology corporation".
-  // Products and people don't contain these words.
+  // ─── Source A: Clearbit autocomplete ─────────────────────────────
+  // Free public API (no key), CORS-enabled, knows ~1M+ companies.
+  // Returns name + domain. Logo served at logo.clearbit.com/{domain}.
+
+  async function fetchFromClearbit(name) {
+    const suggestions = await fetch(
+      'https://autocomplete.clearbit.com/v1/companies/suggest?' + new URLSearchParams({ query: name })
+    ).then(r => r.ok ? r.json() : []).catch(() => []);
+
+    if (!suggestions.length) return null;
+
+    // Prefer results whose domain contains the query string (e.g. "mastersofterp.com" for "mastersoft")
+    const qNorm = name.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const matched = suggestions.filter(s => labelMatchesQuery(s.name ?? '', name));
+    if (!matched.length) return null;
+
+    const best = matched.find(s => (s.domain ?? '').replace(/[^a-z0-9]/g, '').includes(qNorm))
+              ?? matched[0];
+
+    const domain = best.domain;
+    if (!domain) return null;
+
+    const scraped = await scrapeHomepage(domain);
+
+    return {
+      name:      scraped.name ?? best.name,
+      desc:      scraped.desc ?? null,
+      logo:      'https://logo.clearbit.com/' + domain,
+      logoFallback: scraped.logo ?? null,
+      website:   'https://' + domain,
+      domain,
+      founded:   scraped.founded   ?? null,
+      hq:        scraped.hq        ?? null,
+      employees: scraped.employees ?? null,
+      industry:  null,
+      revenue:   null, erp: null, tags: null,
+    };
+  }
+
+  // ─── Source B: Wikidata ───────────────────────────────────────────
+  // For companies with a Wikipedia presence (Fortune 500, major vendors).
+  // Provides: structured description, official website, founding year,
+  // employee count, headquarters, and industry classification.
+
   const COMPANY_DESC = /\b(company|corporation|inc\b|ltd\b|llc\b|multinational|vendor|manufacturer|conglomerate|provider)\b/i;
 
-  // ─── Source 1: Wikidata entity search ────────────────────────────
-  // Uses wbsearchentities (indexed, fast) then wbgetentities for claims.
-  // Gets: name, website (P856), logo (P154), founded (P571), employees (P1128).
-  // Falls back to Wikipedia extract for the description field.
-
   async function fetchFromWikidata(name) {
-    // 1. Search the Wikidata entity index
     const searchRes = await fetch(
       'https://www.wikidata.org/w/api.php?' + new URLSearchParams({
         action: 'wbsearchentities', search: name, type: 'item',
         language: 'en', limit: '10', format: 'json', origin: '*',
       })
-    ).then(r => r.json());
+    ).then(r => r.json()).catch(() => null);
 
-    // Accept the first result whose label matches the query AND whose
-    // Wikidata description sounds like a company (not a product, person, etc.)
-    const hit = (searchRes.search ?? []).find(r =>
+    const hit = (searchRes?.search ?? []).find(r =>
       labelMatchesQuery(r.label ?? '', name) && COMPANY_DESC.test(r.description ?? '')
     );
     if (!hit) return null;
 
-    // 2. Fetch full entity: claims + English Wikipedia sitelink
     const entityRes = await fetch(
       'https://www.wikidata.org/w/api.php?' + new URLSearchParams({
         action: 'wbgetentities', ids: hit.id,
@@ -698,73 +732,58 @@
         sitefilter: 'enwiki', languages: 'en',
         format: 'json', origin: '*',
       })
-    ).then(r => r.json());
+    ).then(r => r.json()).catch(() => null);
 
-    const entity = entityRes.entities?.[hit.id];
+    const entity = entityRes?.entities?.[hit.id];
     if (!entity) return null;
 
-    // Extract a typed claim value from the entity
     function claimVal(prop) {
       const snak = entity.claims?.[prop]?.[0]?.mainsnak;
       if (snak?.snaktype !== 'value') return null;
       const { type, value } = snak.datavalue;
       if (type === 'string')   return value;
-      if (type === 'time')     return value.time?.slice(1, 5) ?? null;  // "+1972-..." → "1972"
+      if (type === 'time')     return value.time?.slice(1, 5) ?? null;
       if (type === 'quantity') return String(value.amount).replace(/^\+/, '');
       return null;
     }
 
-    const website   = claimVal('P856');   // official website URL
-    const logoFile  = claimVal('P154');   // Wikimedia Commons filename
-    const founded   = claimVal('P571');   // inception year
-    const employees = claimVal('P1128'); // employee count
+    const website  = claimVal('P856');
+    const logoFile = claimVal('P154');
+    const founded  = claimVal('P571');
+    const employees = claimVal('P1128');
 
     let domain = null;
     try { domain = website ? new URL(website).hostname.replace(/^www\./, '') : null; } catch {}
 
     const wikiTitle = entity.sitelinks?.enwiki?.title ?? null;
+    const wiki = wikiTitle
+      ? await fetch('https://en.wikipedia.org/api/rest_v1/page/summary/' + encodeURIComponent(wikiTitle))
+          .then(r => r.ok ? r.json() : null).catch(() => null)
+      : null;
 
-    // 3. Fetch Wikipedia extract + scrape company site in parallel
-    const [wiki, scraped] = await Promise.all([
-      wikiTitle
-        ? fetch('https://en.wikipedia.org/api/rest_v1/page/summary/' + encodeURIComponent(wikiTitle))
-            .then(r => r.ok ? r.json() : null).catch(() => null)
-        : null,
-      domain ? scrapeHomepage(domain) : {},
-    ]);
-
-    const extract = wiki?.extract ?? '';
-    const desc = scraped.desc
-      ?? (extract ? (extract.length > 400 ? extract.slice(0, 397) + '…' : extract) : null)
-      ?? hit.description  // Wikidata short description as last resort
-      ?? null;
-
-    // Logo: Clearbit (best quality) → Wikimedia Commons file → Wikipedia thumbnail
-    const clearbitLogo = domain ? 'https://logo.clearbit.com/' + domain : null;
-    const commonsLogo  = logoFile
+    const extract   = wiki?.extract ?? '';
+    const wikiThumb = wiki?.thumbnail?.source ?? null;
+    const commonsLogo = logoFile
       ? 'https://commons.wikimedia.org/wiki/Special:FilePath/' + encodeURIComponent(logoFile)
       : null;
-    const wikiThumb = wiki?.thumbnail?.source ?? null;
 
     return {
       name:         entity.labels?.en?.value ?? hit.label,
-      desc,
-      logo:         clearbitLogo ?? commonsLogo ?? wikiThumb,
+      desc:         extract ? (extract.length > 400 ? extract.slice(0, 397) + '…' : extract) : (hit.description ?? null),
+      logo:         domain ? 'https://logo.clearbit.com/' + domain : commonsLogo ?? wikiThumb,
       logoFallback: wikiThumb ?? commonsLogo ?? null,
       website,
       domain,
-      founded:      founded ?? scraped.founded ?? null,
-      hq:           scraped.hq ?? null,
-      employees:    employees ?? scraped.employees ?? null,
+      founded,
+      hq:           null,
+      employees,
       industry:     hit.description ?? null,
-      revenue:      null,
-      erp:          null,
-      tags:         null,
+      revenue:      null, erp: null, tags: null,
     };
   }
 
-  // ─── Source 2: Google Sheet CSV ──────────────────────────────────
-  // Highest-priority override. Use for any company not found automatically.
+  // ─── Source C: Google Sheet CSV ──────────────────────────────────
+  // Highest-priority override for any company.
 
   async function fetchFromSheet(name) {
     if (!SHEET_URL) return null;
@@ -775,27 +794,42 @@
       const cols = headerLine.split(',').map(c => c.trim().replace(/^"|"$/g, '').toLowerCase());
       const qi   = cols.indexOf('query');
       if (qi < 0) return null;
-      const row  = dataLines
+      const row = dataLines
         .map(l => l.split(',').map(c => c.trim().replace(/^"|"$/g, '')))
         .find(r => r[qi]?.toLowerCase() === name.toLowerCase());
       if (!row) return null;
       const col = k => { const i = cols.indexOf(k); return i >= 0 && row[i] ? row[i] : null; };
       return {
-        name:         col('name'),
-        desc:         col('desc'),
-        logo:         col('logo'),
-        logoFallback: null,
-        website:      col('website'),
-        domain:       null,
-        founded:      col('founded'),
-        revenue:      col('revenue'),
-        employees:    col('employees'),
-        hq:           col('hq'),
-        industry:     col('industry'),
-        erp:          col('erp'),
-        tags:         col('tags')?.split('|').map(t => t.trim()).filter(Boolean) ?? null,
+        name: col('name'), desc: col('desc'), logo: col('logo'), logoFallback: null,
+        website: col('website'), domain: null,
+        founded: col('founded'), revenue: col('revenue'), employees: col('employees'),
+        hq: col('hq'), industry: col('industry'), erp: col('erp'),
+        tags: col('tags')?.split('|').map(t => t.trim()).filter(Boolean) ?? null,
       };
     } catch { return null; }
+  }
+
+  // ─── Merge Clearbit + Wikidata ────────────────────────────────────
+  // Clearbit: best for domain + logo (works for any company in its index).
+  // Wikidata: best for description, structured facts (famous companies only).
+
+  function mergeResults(cb, wd) {
+    if (!cb && !wd) return null;
+    if (!cb) return wd;
+    if (!wd) return cb;
+    return {
+      name:         wd.name ?? cb.name,
+      desc:         wd.desc ?? cb.desc,
+      logo:         cb.logo ?? wd.logo,
+      logoFallback: wd.logoFallback ?? wd.logo ?? null,
+      website:      wd.website ?? cb.website,
+      domain:       cb.domain ?? wd.domain,
+      founded:      wd.founded ?? cb.founded,
+      hq:           wd.hq ?? cb.hq,
+      employees:    wd.employees ?? cb.employees,
+      industry:     wd.industry ?? cb.industry,
+      revenue:      null, erp: null, tags: null,
+    };
   }
 
   // ─── DOM ─────────────────────────────────────────────────────────
@@ -879,15 +913,28 @@
     document.getElementById('snap-logo-icon')?.classList.remove('hidden');
     document.getElementById('snap-logo-img')?.parentElement?.classList.remove('animate-pulse', 'bg-border');
     const msg = document.getElementById('snap-no-data-msg');
-    if (msg) msg.textContent = `"${query}" wasn't found automatically. Add it to the Google Sheet to populate this card.`;
+    if (msg) msg.textContent = `"${query}" wasn't found. Add it to the Google Sheet to populate this card.`;
     document.getElementById('snap-no-data')?.classList.remove('hidden');
   }
 
   // ─── Run ─────────────────────────────────────────────────────────
-  // Sheet takes priority (user-curated). Wikidata covers everything else.
+  // Sheet wins. For everything else, Clearbit + Wikidata run in parallel
+  // and their results are merged (Clearbit for logo/domain, Wikidata for facts).
 
   (async () => {
-    const data = (await fetchFromSheet(query)) ?? (await fetchFromWikidata(query));
+    const sheet = await fetchFromSheet(query);
+    if (sheet) return renderCard(sheet);
+
+    const [cbResult, wdResult] = await Promise.allSettled([
+      fetchFromClearbit(query),
+      fetchFromWikidata(query),
+    ]);
+
+    const data = mergeResults(
+      cbResult.status === 'fulfilled' ? cbResult.value : null,
+      wdResult.status === 'fulfilled' ? wdResult.value : null,
+    );
+
     if (data) renderCard(data); else renderNotFound();
   })().catch(() => renderNotFound());
 })();
