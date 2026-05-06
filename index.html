@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>ERP Search Tool</title>
+
+<!-- Tailwind + Inter, configured against the Analyst Standard tokens from DESIGN.md -->
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0&display=swap" rel="stylesheet" />
+
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          // Surfaces
+          'bg':              '#F1F5F9',  // page canvas (DESIGN.md guidance)
+          'surface':         '#FFFFFF',  // cards
+          'surface-2':       '#F8FAFC',  // subtle inset (table headers etc.)
+          'border':          '#E5E7EB',  // 1px structural border
+          'border-strong':   '#CBD5E1',  // hover border
+          // Ink
+          'ink':             '#141B2B',  // primary text
+          'ink-muted':       '#424655',  // secondary text
+          'ink-faint':       '#727687',  // labels / outline
+          // Brand
+          'primary':         '#0067FF',  // primary action
+          'primary-press':   '#0051CB',
+          'success':         '#8ED443',  // positive signal
+          'success-soft':    '#ECFAD9',
+          'warn':            '#A23400',
+          'warn-soft':       '#FFEFE6',
+          'error':           '#BA1A1A',
+          'error-soft':      '#FFDAD6',
+        },
+        fontFamily: {
+          sans: ['Inter', 'system-ui', 'sans-serif'],
+        },
+        fontSize: {
+          // Scale from DESIGN.md
+          'headline-lg': ['24px', { lineHeight: '32px', letterSpacing: '-0.02em', fontWeight: '600' }],
+          'headline-md': ['18px', { lineHeight: '24px', letterSpacing: '-0.01em', fontWeight: '600' }],
+          'headline-sm': ['16px', { lineHeight: '24px', fontWeight: '600' }],
+          'body-lg':     ['16px', { lineHeight: '24px', fontWeight: '400' }],
+          'body-md':     ['14px', { lineHeight: '20px', fontWeight: '400' }],
+          'body-sm':     ['13px', { lineHeight: '18px', fontWeight: '400' }],
+          'label-md':    ['12px', { lineHeight: '16px', letterSpacing: '0.05em', fontWeight: '500' }],
+          'label-sm':    ['11px', { lineHeight: '14px', fontWeight: '600' }],
+        },
+        borderRadius: {
+          'sm': '0.125rem',
+          DEFAULT: '0.25rem',
+          'md': '0.375rem',
+          'lg': '0.5rem',
+          'xl': '0.75rem',
+        },
+        spacing: {
+          'gutter': '1.5rem',
+          'card':   '1.25rem',
+          'gap':    '2rem',
+        },
+        maxWidth: {
+          'container': '1280px',
+        },
+        boxShadow: {
+          'ambient': '0 1px 3px 0 rgba(0,0,0,0.05), 0 1px 2px 0 rgba(0,0,0,0.03)',
+        },
+      },
+    },
+  };
+</script>
+
+<style>
+  body { font-family: 'Inter', system-ui, sans-serif; }
+  .material-symbols-outlined { font-size: 20px; vertical-align: middle; }
+
+  /* Re-skin Google CSE so it inherits the design system */
+  #news-results .gsc-control-cse,
+  #news-results .gsc-control-wrapper-cse { background: transparent !important; border: none !important; padding: 0 !important; font-family: 'Inter', system-ui, sans-serif !important; }
+  #news-results .gsc-input-box { border-color: #E5E7EB !important; border-radius: 0.25rem !important; box-shadow: none !important; }
+  #news-results .gsc-search-button-v2 { padding: 8px 14px !important; border-radius: 0.25rem !important; background: #0067FF !important; border-color: #0067FF !important; }
+  #news-results .gsc-search-button-v2 svg { fill: #fff !important; }
+  #news-results .gsc-tabsArea, #news-results .gcsc-find-more-on-google, #news-results .gcsc-more-maybe-branding-root { display: none !important; }
+  #news-results .gsc-result { border-bottom: 1px solid #E5E7EB !important; padding: 12px 0 !important; }
+  #news-results .gsc-result:last-child { border-bottom: none !important; }
+  #news-results .gs-title, #news-results .gs-title b { color: #0051CB !important; font-weight: 600 !important; text-decoration: none !important; }
+  #news-results .gs-snippet { color: #424655 !important; font-size: 13px !important; line-height: 18px !important; }
+  #news-results .gs-visibleUrl, #news-results .gs-visibleUrl-long { color: #727687 !important; font-size: 12px !important; }
+  #news-results .gsc-cursor-page { color: #0067FF !important; }
+  #news-results .gsc-cursor-current-page { color: #141B2B !important; font-weight: 600 !important; }
+</style>
+
+<!-- Google Programmable Search (CSE). Loads asynchronously; the element below auto-runs from ?q= -->
+<script async src="https://cse.google.com/cse.js?cx=81dc85bd938ba4eac"></script>
+</head>
+<body class="bg-bg text-ink min-h-screen flex flex-col">
+
+<!-- Banner shown only when opened via file:// (CSE refuses to load there) -->
+<div id="file-warning" class="hidden bg-warn-soft border-b border-warn text-warn px-gutter py-3 text-body-sm">
+  <strong>Heads up:</strong> Google Custom Search will not run when this file is opened with <code>file://</code>.
+  From the project folder, run <code class="bg-white px-1 py-0.5 rounded border border-border">python3 -m http.server 8000</code>
+  and open <code class="bg-white px-1 py-0.5 rounded border border-border">http://localhost:8000/index.html</code> instead.
+</div>
+
+<!-- ============================================================
+     LANDING PAGE — single search box. Submitting it navigates
+     to ./index.html?q=<company> which switches to the dashboard.
+     ============================================================ -->
+<section id="landing" class="hidden flex-1 flex items-center justify-center px-gutter">
+  <div class="w-full max-w-2xl text-center">
+    <div class="flex items-center justify-center gap-3 mb-6">
+      <div class="w-12 h-12 rounded-lg bg-primary flex items-center justify-center shadow-ambient">
+        <span class="material-symbols-outlined text-white" style="font-size:26px;">search</span>
+      </div>
+      <h1 class="text-headline-lg text-ink tracking-tight">ERP SEARCH TOOL</h1>
+    </div>
+    <p class="text-body-md text-ink-muted mb-8">Enter a company name to view its latest news and insights.</p>
+    <form id="landing-form" action="./index.html" method="get"
+          class="flex items-center bg-surface border border-border rounded-lg overflow-hidden shadow-ambient focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/20 transition-colors">
+      <span class="material-symbols-outlined text-ink-faint pl-4 pr-2">search</span>
+      <input id="landing-q" name="q" type="text" autocomplete="off" required
+             class="flex-1 h-12 text-body-lg px-2 outline-none bg-transparent placeholder-ink-faint"
+             placeholder="Search for a company…" />
+      <button type="submit"
+              class="h-12 px-6 bg-primary hover:bg-primary-press text-white text-body-md font-semibold transition-colors">
+        Search
+      </button>
+    </form>
+    <p class="mt-6 text-body-sm text-ink-faint">Try: <em>SAP</em>, <em>Oracle</em>, <em>Microsoft</em>, <em>Workday</em>.</p>
+  </div>
+</section>
+
+<!-- ============================================================
+     DASHBOARD — shown only when ?q=<company> is in the URL.
+     ============================================================ -->
+<div id="dashboard" class="hidden flex-1 flex flex-col">
+
+  <!-- Top nav (no sidebar) -->
+  <header class="sticky top-0 z-40 bg-surface border-b border-border h-14 px-gutter flex items-center justify-between">
+    <a href="./index.html" class="flex items-center gap-2 px-2 py-1 rounded hover:bg-surface-2 transition-colors">
+      <span class="material-symbols-outlined text-ink-muted">arrow_back</span>
+      <span class="text-headline-md text-ink">ERP SEARCH TOOL</span>
+    </a>
+    <form id="header-form" action="./index.html" method="get" class="flex-1 max-w-md mx-8">
+      <div class="flex items-center h-9 bg-surface-2 border border-border rounded focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/20 transition">
+        <span class="material-symbols-outlined text-ink-faint ml-2" style="font-size:18px;">search</span>
+        <input id="header-q" name="q" type="text" autocomplete="off"
+               class="flex-1 bg-transparent text-body-sm px-2 outline-none placeholder-ink-faint"
+               placeholder="Search company…" />
+      </div>
+    </form>
+    <div class="flex items-center gap-1">
+      <button class="w-9 h-9 rounded-full hover:bg-surface-2 text-ink-muted flex items-center justify-center transition" aria-label="Notifications">
+        <span class="material-symbols-outlined">notifications</span>
+      </button>
+      <button class="w-9 h-9 rounded-full hover:bg-surface-2 text-ink-muted flex items-center justify-center transition" aria-label="Help">
+        <span class="material-symbols-outlined">help</span>
+      </button>
+      <div class="w-9 h-9 rounded-full bg-surface-2 border border-border flex items-center justify-center ml-1">
+        <span class="material-symbols-outlined text-ink-muted" style="font-size:18px;">person</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main content -->
+  <main class="flex-1 overflow-y-auto px-gutter py-gutter">
+    <div class="max-w-container mx-auto flex flex-col gap-gap">
+
+      <!-- Page header -->
+      <div class="flex items-end justify-between gap-4">
+        <div>
+          <h2 id="company-name" class="text-headline-lg text-ink">Company</h2>
+          <p class="text-body-sm text-ink-muted mt-1">News and insights for the selected company.</p>
+        </div>
+        <div class="flex gap-2">
+          <button class="px-4 h-9 inline-flex items-center gap-2 bg-surface border border-border text-ink text-label-md rounded shadow-ambient hover:border-border-strong transition">
+            <span class="material-symbols-outlined" style="font-size:16px;">filter_list</span> FILTER
+          </button>
+          <button class="px-4 h-9 inline-flex items-center gap-2 bg-primary hover:bg-primary-press text-white text-label-md rounded shadow-ambient transition">
+            <span class="material-symbols-outlined" style="font-size:16px;">download</span> EXPORT
+          </button>
+        </div>
+      </div>
+
+      <!-- News (full width) -->
+      <section class="bg-surface border border-border rounded-lg shadow-ambient p-card hover:border-border-strong transition-colors">
+        <div class="flex items-center justify-between border-b border-border pb-3 mb-4">
+          <h3 class="text-headline-sm text-ink flex items-center gap-2">
+            <span class="material-symbols-outlined text-primary">newspaper</span>
+            Latest News:
+            <span id="news-company-name" class="text-primary"></span>
+          </h3>
+          <span class="text-label-sm uppercase tracking-wider text-ink-faint">Powered by Google</span>
+        </div>
+
+        <!--
+          The element Google Programmable Search renders into.
+          - data-queryParameterName="q": CSE reads ?q=... from the URL on load.
+          - data-autoSearchOnLoad="true": runs the search automatically when q is present.
+          The user can also type into the search box CSE renders here.
+        -->
+        <div id="news-results" class="gcse-search"
+             data-queryParameterName="q"
+             data-autoSearchOnLoad="true"></div>
+
+        <p id="news-fallback" class="hidden mt-4 text-body-sm text-ink-muted">
+          Results not loading? Make sure you opened this page over <code>http://</code> (not <code>file://</code>),
+          and that no extension is blocking <code>cse.google.com</code>.
+        </p>
+      </section>
+
+      <!-- 2x2 placeholder grid -->
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+
+        <!-- Upcoming Events -->
+        <section class="bg-surface border border-border rounded-lg shadow-ambient p-card flex flex-col">
+          <div class="flex items-center justify-between border-b border-border pb-3 mb-4">
+            <h3 class="text-headline-sm text-ink flex items-center gap-2">
+              <span class="material-symbols-outlined text-ink-muted">event</span>
+              Upcoming Events
+            </h3>
+            <button class="w-7 h-7 rounded hover:bg-surface-2 text-ink-faint flex items-center justify-center"><span class="material-symbols-outlined" style="font-size:18px;">more_vert</span></button>
+          </div>
+          <div class="flex flex-col gap-3 flex-1">
+            <div class="flex gap-3 items-start">
+              <div class="w-12 h-12 bg-surface-2 rounded border border-border flex flex-col items-center justify-center">
+                <div class="h-3 w-6 bg-border rounded mb-1"></div>
+                <div class="h-4 w-8 bg-border-strong rounded"></div>
+              </div>
+              <div class="flex-1 space-y-2 py-1">
+                <div class="h-4 bg-surface-2 rounded w-3/4"></div>
+                <div class="h-3 bg-surface-2 rounded w-1/2"></div>
+              </div>
+            </div>
+            <hr class="border-border" />
+            <div class="flex gap-3 items-start">
+              <div class="w-12 h-12 bg-surface-2 rounded border border-border flex flex-col items-center justify-center">
+                <div class="h-3 w-6 bg-border rounded mb-1"></div>
+                <div class="h-4 w-8 bg-border-strong rounded"></div>
+              </div>
+              <div class="flex-1 space-y-2 py-1">
+                <div class="h-4 bg-surface-2 rounded w-5/6"></div>
+                <div class="h-3 bg-surface-2 rounded w-2/3"></div>
+              </div>
+            </div>
+            <hr class="border-border" />
+            <div class="flex gap-3 items-start">
+              <div class="w-12 h-12 bg-surface-2 rounded border border-border flex flex-col items-center justify-center">
+                <div class="h-3 w-6 bg-border rounded mb-1"></div>
+                <div class="h-4 w-8 bg-border-strong rounded"></div>
+              </div>
+              <div class="flex-1 space-y-2 py-1">
+                <div class="h-4 bg-surface-2 rounded w-2/3"></div>
+                <div class="h-3 bg-surface-2 rounded w-1/3"></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Active Competitions -->
+        <section class="bg-surface border border-border rounded-lg shadow-ambient p-card flex flex-col">
+          <div class="flex items-center justify-between border-b border-border pb-3 mb-4">
+            <h3 class="text-headline-sm text-ink flex items-center gap-2">
+              <span class="material-symbols-outlined text-warn">emoji_events</span>
+              Active Competitions
+            </h3>
+            <button class="w-7 h-7 rounded hover:bg-surface-2 text-ink-faint flex items-center justify-center"><span class="material-symbols-outlined" style="font-size:18px;">more_vert</span></button>
+          </div>
+          <div class="flex flex-col gap-3 flex-1">
+            <div class="p-3 bg-surface-2 rounded border border-border flex items-center justify-between">
+              <div class="space-y-2 w-2/3">
+                <div class="h-4 bg-white rounded border border-border w-full"></div>
+                <div class="h-3 bg-white rounded border border-border w-1/2"></div>
+              </div>
+              <div class="h-6 w-16 bg-warn-soft rounded-full flex items-center justify-center">
+                <div class="h-2 w-8 bg-warn rounded"></div>
+              </div>
+            </div>
+            <div class="p-3 bg-surface-2 rounded border border-border flex items-center justify-between">
+              <div class="space-y-2 w-2/3">
+                <div class="h-4 bg-white rounded border border-border w-5/6"></div>
+                <div class="h-3 bg-white rounded border border-border w-1/3"></div>
+              </div>
+              <div class="h-6 w-16 bg-warn-soft rounded-full flex items-center justify-center">
+                <div class="h-2 w-10 bg-warn rounded"></div>
+              </div>
+            </div>
+            <div class="p-3 bg-surface-2 rounded border border-border flex items-center justify-between">
+              <div class="space-y-2 w-2/3">
+                <div class="h-4 bg-white rounded border border-border w-4/5"></div>
+                <div class="h-3 bg-white rounded border border-border w-2/5"></div>
+              </div>
+              <div class="h-6 w-16 bg-surface rounded-full flex items-center justify-center border border-border">
+                <div class="h-2 w-6 bg-ink-faint rounded"></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Job Board -->
+        <section class="bg-surface border border-border rounded-lg shadow-ambient p-card flex flex-col">
+          <div class="flex items-center justify-between border-b border-border pb-3 mb-4">
+            <h3 class="text-headline-sm text-ink flex items-center gap-2">
+              <span class="material-symbols-outlined text-success">work</span>
+              Job Board
+            </h3>
+            <button class="w-7 h-7 rounded hover:bg-surface-2 text-ink-faint flex items-center justify-center"><span class="material-symbols-outlined" style="font-size:18px;">more_vert</span></button>
+          </div>
+          <div class="flex flex-col gap-3 flex-1">
+            <div class="flex items-center gap-3">
+              <div class="w-10 h-10 bg-surface-2 rounded-full border border-border"></div>
+              <div class="flex-1 space-y-2">
+                <div class="h-4 bg-surface-2 rounded w-3/4"></div>
+                <div class="h-3 bg-surface-2 rounded w-1/2"></div>
+              </div>
+              <span class="material-symbols-outlined text-ink-faint" style="font-size:18px;">chevron_right</span>
+            </div>
+            <hr class="border-border" />
+            <div class="flex items-center gap-3">
+              <div class="w-10 h-10 bg-surface-2 rounded-full border border-border"></div>
+              <div class="flex-1 space-y-2">
+                <div class="h-4 bg-surface-2 rounded w-5/6"></div>
+                <div class="h-3 bg-surface-2 rounded w-2/3"></div>
+              </div>
+              <span class="material-symbols-outlined text-ink-faint" style="font-size:18px;">chevron_right</span>
+            </div>
+            <hr class="border-border" />
+            <div class="flex items-center gap-3">
+              <div class="w-10 h-10 bg-surface-2 rounded-full border border-border"></div>
+              <div class="flex-1 space-y-2">
+                <div class="h-4 bg-surface-2 rounded w-2/3"></div>
+                <div class="h-3 bg-surface-2 rounded w-1/3"></div>
+              </div>
+              <span class="material-symbols-outlined text-ink-faint" style="font-size:18px;">chevron_right</span>
+            </div>
+          </div>
+        </section>
+
+        <!-- SEO Metrics -->
+        <section class="bg-surface border border-border rounded-lg shadow-ambient p-card flex flex-col">
+          <div class="flex items-center justify-between border-b border-border pb-3 mb-4">
+            <h3 class="text-headline-sm text-ink flex items-center gap-2">
+              <span class="material-symbols-outlined text-primary">bar_chart</span>
+              SEO Metrics
+            </h3>
+            <div class="flex gap-1">
+              <button class="px-2 h-6 text-label-sm bg-surface-2 rounded text-ink">1D</button>
+              <button class="px-2 h-6 text-label-sm text-ink-faint hover:bg-surface-2 rounded">1W</button>
+              <button class="px-2 h-6 text-label-sm text-ink-faint hover:bg-surface-2 rounded">1M</button>
+            </div>
+          </div>
+          <div class="grid grid-cols-2 gap-3 mb-4">
+            <div class="p-3 border border-border rounded bg-white flex flex-col gap-1">
+              <span class="text-label-sm uppercase tracking-wider text-ink-faint">Organic Traffic</span>
+              <div class="h-6 bg-surface-2 rounded w-1/2"></div>
+              <div class="h-3 w-10 bg-success-soft rounded mt-1"></div>
+            </div>
+            <div class="p-3 border border-border rounded bg-white flex flex-col gap-1">
+              <span class="text-label-sm uppercase tracking-wider text-ink-faint">Bounce Rate</span>
+              <div class="h-6 bg-surface-2 rounded w-2/5"></div>
+              <div class="h-3 w-10 bg-error-soft rounded mt-1"></div>
+            </div>
+          </div>
+          <div class="flex-1 min-h-[100px] border border-border rounded bg-surface-2 p-2 flex items-end gap-1.5">
+            <div class="flex-1 bg-primary/20 rounded-t h-1/4"></div>
+            <div class="flex-1 bg-primary/40 rounded-t h-1/3"></div>
+            <div class="flex-1 bg-primary/60 rounded-t h-1/2"></div>
+            <div class="flex-1 bg-primary/80 rounded-t h-3/4"></div>
+            <div class="flex-1 bg-primary rounded-t h-full"></div>
+            <div class="flex-1 bg-primary/60 rounded-t h-2/3"></div>
+            <div class="flex-1 bg-primary/40 rounded-t h-1/2"></div>
+          </div>
+        </section>
+
+      </div>
+    </div>
+  </main>
+</div>
+
+<script>
+  (function () {
+    // 1. Detect file:// — CSE refuses to load there.
+    if (location.protocol === 'file:') {
+      document.getElementById('file-warning').classList.remove('hidden');
+    }
+
+    // 2. Read ?q= and toggle between landing and dashboard. CSE itself reads
+    //    the same parameter and runs the search automatically.
+    const q = (new URLSearchParams(location.search).get('q') || '').trim();
+
+    if (q) {
+      document.getElementById('dashboard').classList.remove('hidden');
+      document.getElementById('company-name').textContent = q;
+      document.getElementById('news-company-name').textContent = q;
+      const headerInput = document.getElementById('header-q');
+      if (headerInput) headerInput.value = q;
+      document.title = q + ' — ERP Search Tool';
+    } else {
+      document.getElementById('landing').classList.remove('hidden');
+    }
+
+    // 3. After 8 seconds, if CSE still hasn't rendered any results UI, show a hint.
+    if (q) {
+      setTimeout(function () {
+        const hasResults = document.querySelector('#news-results .gsc-control-cse');
+        if (!hasResults) document.getElementById('news-fallback').classList.remove('hidden');
+      }, 8000);
+    }
+  })();
+</script>
+</body>
+</html>
