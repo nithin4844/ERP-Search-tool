@@ -592,17 +592,17 @@
   })();
 </script>
 
-<!-- ── Company Snapshot data loader: Wikipedia + Wikidata + Clearbit + Google Sheet override ── -->
+<!-- ── Company Snapshot: Google Sheet → Wikipedia → OpenCorporates (govt registries) → fallback ── -->
 <script>
 (function () {
   const q = (new URLSearchParams(location.search).get('q') || '').trim();
   if (!q) return;
 
   // ── CONFIGURATION ────────────────────────────────────────────────
-  // For companies not on Wikipedia (e.g. Masssoft), publish a Google Sheet as CSV
-  // with these column headers (row 1, exact names):
+  // For companies not found automatically, publish a Google Sheet as CSV.
+  // Column headers (row 1, exact names):
   //   query | name | desc | industry | hq | employees | founded | revenue | erp | website | logo | tags
-  // File → Share → Publish to web → CSV. Paste the URL below.
+  // File → Share → Publish to web → CSV. Paste URL below.
   const SHEET_CSV_URL = '';
 
   // ── Website scraping (JSON-LD + meta tags) ───────────────────────
@@ -652,12 +652,33 @@
     } catch { return {}; }
   }
 
-  // ── Wikipedia + Wikidata (primary source) ────────────────────────
+  // ── Shared helpers ───────────────────────────────────────────────
+
+  // Returns true only if the Wikipedia/registry title is about the queried company
+  function nameMatches(title, query) {
+    const t = title.toLowerCase().replace(/[^a-z0-9\s]/g, '');
+    const q = query.toLowerCase().replace(/[^a-z0-9\s]/g, '');
+    const qWords = q.split(/\s+/).filter(w => w.length > 2);
+    return t.includes(q) ||
+      (qWords.length > 0 && qWords.every(w => t.includes(w))) ||
+      t.split(/\s+/).some(w => w.length > 3 && q.includes(w));
+  }
+
+  // Derive a best-guess domain from a legal company name
+  function guessDomain(companyName) {
+    const base = (companyName || '')
+      .replace(/\b(PTY\s*LTD|PVT\s*LTD|LIMITED|LTD|LLC|INC\.?|CORP\.?|CORPORATION|CO\b|PLC|GMBH|AG\b|SE\b|SARL|SRL|BV\b|NV\b|AB\b|OY\b|GROUP|HOLDINGS|SERVICES|TECHNOLOGIES|SOLUTIONS|SYSTEMS|INTERNATIONAL|GLOBAL)\b\.?/gi, '')
+      .trim().split(/\s+/)[0];
+    return (base || companyName).toLowerCase().replace(/[^a-z0-9]/g, '') + '.com';
+  }
+
+  // ── SOURCE 1: Wikipedia + Wikidata ──────────────────────────────
+  // Good for Fortune-500 and well-known vendors; validates name similarity
+  // to prevent wrong-company matches (e.g. "Mastersoft" → "Adobe").
   const BIZ_RE = /\b(company|corporation|corp\b|inc\b|ltd\b|llc\b|software|enterprise|technologies|solutions|provider|multinational|vendor|manufacturer|conglomerate)\b/i;
 
   async function fromWikipedia(query) {
     try {
-      // 1. Search Wikipedia for the company page
       const searchRes = await fetch(
         'https://en.wikipedia.org/w/api.php?' + new URLSearchParams({
           action: 'query', list: 'search', srsearch: query,
@@ -669,12 +690,11 @@
       let title = null;
       for (const h of hits) {
         const text = h.title + ' ' + (h.snippet || '').replace(/<[^>]+>/g, '');
-        if (BIZ_RE.test(text)) { title = h.title; break; }
+        // Must look like a business AND name must actually match the query
+        if (BIZ_RE.test(text) && nameMatches(h.title, query)) { title = h.title; break; }
       }
-      if (!title && hits.length) title = hits[0].title;
-      if (!title) return null;
+      if (!title) return null;  // no name-matched business result → try next source
 
-      // 2. Page summary + pageprops in parallel
       const [summary, propsRes] = await Promise.all([
         fetch('https://en.wikipedia.org/api/rest_v1/page/summary/' + encodeURIComponent(title))
           .then(r => r.json()),
@@ -685,7 +705,6 @@
 
       if (!summary?.extract || summary.type === 'disambiguation') return null;
 
-      // 3. Official website from Wikidata property P856
       const qid = Object.values(propsRes?.query?.pages || {})[0]?.pageprops?.wikibase_item;
       let website = null;
       if (qid) {
@@ -698,27 +717,20 @@
         if (p856) website = p856.mainsnak?.datavalue?.value;
       }
 
-      // 4. Derive domain (from Wikidata URL or heuristic guess)
       let domain = null;
       if (website) {
         try { domain = new URL(website).hostname.replace(/^www\./, ''); } catch {}
       } else {
-        domain = summary.title
-          .toLowerCase()
-          .replace(/\b(se|plc|inc|ltd|llc|corp|corporation|company|group|ag|gmbh|bv|nv|sa|ab|oy)\b/g, '')
-          .replace(/[^a-z0-9]/g, '') + '.com';
+        domain = guessDomain(summary.title);
       }
 
-      // 5. Scrape website for structured details (best-effort)
       const scraped = domain ? await scrapeWebsite(domain) : {};
-
       const extract = summary.extract || '';
-      const desc    = scraped.desc || (extract.length > 400 ? extract.slice(0, 397) + '…' : extract) || null;
       const wikiThumb = summary.thumbnail?.source || null;
 
       return {
         name:      summary.title,
-        desc,
+        desc:      scraped.desc || (extract.length > 400 ? extract.slice(0, 397) + '…' : extract) || null,
         logo:      domain ? 'https://logo.clearbit.com/' + domain : wikiThumb,
         wikiThumb,
         website:   website || (domain ? 'https://' + domain : null),
@@ -727,14 +739,71 @@
         hq:        scraped.hq        || null,
         employees: scraped.employees || null,
         industry:  summary.description || null,
-        revenue:   null,
-        erp:       null,
-        tags:      null,
+        revenue: null, erp: null, tags: null,
       };
     } catch { return null; }
   }
 
-  // ── Google Sheet CSV override ────────────────────────────────────
+  // ── SOURCE 2: OpenCorporates ─────────────────────────────────────
+  // Aggregates 130+ government company registries (Companies House, SEC,
+  // ASIC, MCA21, etc.). Works for small/regional companies not on Wikipedia.
+  async function fromOpenCorporates(query) {
+    try {
+      const apiUrl = 'https://api.opencorporates.com/v0.4/companies/search?' + new URLSearchParams({
+        q: query, format: 'json', per_page: '5',
+      });
+      const data = await fetch('https://corsproxy.io/?' + encodeURIComponent(apiUrl))
+                         .then(r => r.ok ? r.json() : null);
+
+      const hits = data?.results?.companies || [];
+      if (!hits.length) return null;
+
+      // Prefer active companies whose name matches the query
+      let best = null;
+      for (const { company: c } of hits) {
+        if (nameMatches(c.name || '', query) && c.current_status !== 'Dissolved') {
+          best = c; break;
+        }
+      }
+      // Widen: any status match
+      if (!best) for (const { company: c } of hits) {
+        if (nameMatches(c.name || '', query)) { best = c; break; }
+      }
+      if (!best) return null;
+
+      // Title-case and strip legal suffixes for display
+      const displayName = (best.name || query)
+        .replace(/\b(PTY\s*LTD|PVT\s*LTD|LIMITED|LTD|LLC|INC\.?|CORP\.?|CORPORATION|CO\b|PLC|GMBH|AG\b|SE\b|SARL|SRL|BV\b|NV\b|AB\b|OY\b)\b\.?/gi, '')
+        .trim()
+        .replace(/\b\w/g, c => c.toUpperCase())
+        .replace(/\b(Of|And|The|In|For)\b/g, w => w.toLowerCase())
+        .trim() || query;
+
+      const domain  = guessDomain(best.name || query);
+      const scraped = await scrapeWebsite(domain);
+
+      const addr = best.registered_address;
+      const hq   = addr
+        ? [addr.locality, addr.region, addr.country].filter(Boolean).join(', ')
+        : null;
+
+      return {
+        name:      displayName,
+        desc:      scraped.desc || null,
+        logo:      'https://logo.clearbit.com/' + domain,
+        wikiThumb: null,
+        website:   'https://' + domain,
+        domain,
+        founded:   best.incorporation_date ? String(best.incorporation_date).slice(0, 4) : null,
+        hq,
+        employees: null,
+        industry:  best.company_type || null,
+        revenue: null, erp: null, tags: null,
+      };
+    } catch { return null; }
+  }
+
+  // ── SOURCE 3: Google Sheet CSV override ─────────────────────────
   async function fromSheet(query) {
     if (!SHEET_CSV_URL) return null;
     try {
@@ -782,7 +851,6 @@
         logoBg?.classList.remove('animate-pulse', 'bg-border');
       };
       img.onerror = () => {
-        // Clearbit failed → try Wikipedia thumbnail
         if (d.wikiThumb && img.src !== d.wikiThumb) {
           img.src = d.wikiThumb;
         } else {
@@ -849,9 +917,10 @@
   }
 
   // ── Entry point ──────────────────────────────────────────────────
+  // Priority: manual Sheet → Wikipedia (known vendors) → OpenCorporates (govt registries)
   async function load() {
     try {
-      const data = (await fromSheet(q)) || (await fromWikipedia(q));
+      const data = (await fromSheet(q)) || (await fromWikipedia(q)) || (await fromOpenCorporates(q));
       if (data) render(data);
       else renderEmpty(q);
     } catch { renderEmpty(q); }
