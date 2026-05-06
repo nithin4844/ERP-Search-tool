@@ -78,6 +78,16 @@
   body { font-family: 'Inter', system-ui, sans-serif; }
   .material-symbols-outlined { font-size: 20px; vertical-align: middle; }
 
+  /* CSE injects an overlay/modal at body level even when we only ask for inline
+     results. Suppress it so the news stays confined to the card. */
+  .gsc-modal-background-image,
+  .gsc-modal-background-image-visible,
+  .gsc-results-popup-wrapper,
+  .gsc-results-wrapper-overlay,
+  .gsc-results-wrapper-visible,
+  .gsc-resultsbox-popup,
+  .gsc-resultsbox-visible { display: none !important; }
+
   /* Re-skin Google CSE so it inherits the design system */
   #news-results .gsc-control-cse,
   #news-results .gsc-control-wrapper-cse { background: transparent !important; border: none !important; padding: 0 !important; font-family: 'Inter', system-ui, sans-serif !important; }
@@ -198,12 +208,13 @@
         </div>
 
         <!--
-          The element Google Programmable Search renders into.
+          Inline-only results. searchresults-only renders directly into this div
+          (no overlay/popup), so the news stays confined to this card.
           - data-queryParameterName="q": CSE reads ?q=... from the URL on load.
           - data-autoSearchOnLoad="true": runs the search automatically when q is present.
-          The user can also type into the search box CSE renders here.
+          To change company, use the header search — it submits ?q=<new> and reloads.
         -->
-        <div id="news-results" class="gcse-search"
+        <div id="news-results" class="gcse-searchresults-only"
              data-queryParameterName="q"
              data-autoSearchOnLoad="true"></div>
 
