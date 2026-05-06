@@ -646,6 +646,17 @@
     return cut > 60 ? text.slice(0, cut + 1) : text.slice(0, max - 1) + '…';
   }
 
+  // Returns true when text looks like a marketing tagline rather than a factual description:
+  // too short, ends with !, or is a pure keyword list (no spaces past 60 chars).
+  const MARKETING_WORDS = /\b(innovative|cutting.?edge|world.?class|best.?in.?class|revolutionary|next.?gen|game.?changing|transform your|empower your|unleash|seamless(ly)?)\b/i;
+  function isMarketingCopy(text) {
+    if (!text) return true;
+    if (text.length < 60) return true;
+    if (text.trimEnd().endsWith('!')) return true;
+    if (MARKETING_WORDS.test(text)) return true;
+    return false;
+  }
+
   async function scrapeHomepage(domain) {
     try {
       const html = await fetch('https://corsproxy.io/?' + encodeURIComponent('https://' + domain))
@@ -666,7 +677,10 @@
 
       return {
         name:      ld.name ?? parseMeta(html, 'og:site_name') ?? titleName ?? null,
-        desc:      trimDesc(ld.desc ?? parseMeta(html, 'og:description', 'description') ?? null),
+        desc:      (() => {
+          const raw = trimDesc(ld.desc ?? parseMeta(html, 'og:description', 'description') ?? null);
+          return isMarketingCopy(raw) ? null : raw;
+        })(),
         logo:      ld.logo ?? null,   // og:image is a page hero, not a logo — skip it
         founded,
         hq:        ld.hq ?? null,
