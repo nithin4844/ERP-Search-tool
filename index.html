@@ -666,33 +666,76 @@
       || q.toLowerCase().split(/\s+/).filter(w => w.length > 2).every(w => t.includes(w));
   }
 
+  // ERP / educational-ERP domain signals — used to break ties in favour of the right industry.
+  const ERP_HINT = /erp|campus|edtech|lms|sms\b|school|college|student|academic|university/i;
+
+  // Infer the ERP type from a company's name + description.
+  function inferErp(name, desc) {
+    const text = ((name ?? '') + ' ' + (desc ?? '')).toLowerCase();
+    if (/educational?\s*erp|campus\s*(erp|management|solution)|student\s*(information|management)\s*system|school\s*(erp|management)|university\s*erp|college\s*erp/i.test(text)) return 'Educational ERP';
+    if (/erp|enterprise\s*resource\s*plan/i.test(text)) return 'ERP';
+    return null;
+  }
+
   // ─── Source A: Clearbit autocomplete ─────────────────────────────
   // Free public API (no key), CORS-enabled, knows ~1M+ companies.
   // Returns name + domain. Logo served at logo.clearbit.com/{domain}.
 
   async function fetchFromClearbit(name) {
-    const suggestions = await fetch(
-      'https://autocomplete.clearbit.com/v1/companies/suggest?' + new URLSearchParams({ query: name })
+    const cbFetch = q => fetch(
+      'https://autocomplete.clearbit.com/v1/companies/suggest?' + new URLSearchParams({ query: q })
     ).then(r => r.ok ? r.json() : []).catch(() => []);
+
+    let suggestions = await cbFetch(name);
+
+    // If the raw query returns no ERP-domain hits, try "<name> ERP" to surface
+    // niche vendors (e.g. "MasterSoft ERP", "Campus ERP") that Clearbit ranks lower.
+    const hasErpHit = s => ERP_HINT.test(s.domain ?? '') || ERP_HINT.test(s.name ?? '');
+    if (suggestions.length && !suggestions.some(hasErpHit)) {
+      const erpSuggestions = await cbFetch(name + ' ERP');
+      if (erpSuggestions.length) {
+        const seen = new Set(suggestions.map(s => s.domain));
+        suggestions = [...suggestions, ...erpSuggestions.filter(s => !seen.has(s.domain))];
+      }
+    }
 
     if (!suggestions.length) return null;
 
-    // Prefer results whose domain contains the query string (e.g. "mastersofterp.com" for "mastersoft")
+    // Score: exact match > ERP-name suffix > very-close prefix > prefix > word-match.
     const qNorm = name.toLowerCase().replace(/[^a-z0-9]/g, '');
-    const matched = suggestions.filter(s => labelMatchesQuery(s.name ?? '', name));
-    if (!matched.length) return null;
+    function matchScore(label) {
+      const t = (label ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+      if (t === qNorm) return 5;
+      if (t === qNorm + 'erp' || t === qNorm + 'software' || t === qNorm + 'solutions') return 4;
+      if (t.startsWith(qNorm) && t.length - qNorm.length <= 3) return 3;
+      if (t.startsWith(qNorm)) return 2;
+      if (name.toLowerCase().split(/\s+/).filter(w => w.length > 2).every(w => t.includes(w.toLowerCase()))) return 1;
+      return 0;
+    }
 
-    const best = matched.find(s => (s.domain ?? '').replace(/[^a-z0-9]/g, '').includes(qNorm))
-              ?? matched[0];
+    const scored = suggestions
+      .map(s => ({ ...s, score: matchScore(s.name ?? ''), erpHint: hasErpHit(s) }))
+      .filter(s => s.score > 0)
+      // Sort by name-match quality; within a tie, ERP-domain companies come first.
+      .sort((a, b) => b.score - a.score || (b.erpHint ? 1 : 0) - (a.erpHint ? 1 : 0));
+    if (!scored.length) return null;
+
+    const topScore = scored[0].score;
+    const topTier  = scored.filter(s => s.score === topScore);
+    const best = topTier.find(s => s.erpHint)
+              ?? topTier.find(s => (s.domain ?? '').replace(/[^a-z0-9]/g, '').includes(qNorm))
+              ?? topTier[0];
 
     const domain = best.domain;
     if (!domain) return null;
 
     const scraped = await scrapeHomepage(domain);
+    const resolvedName = scraped.name ?? best.name;
+    const resolvedDesc = scraped.desc ?? null;
 
     return {
-      name:      scraped.name ?? best.name,
-      desc:      scraped.desc ?? null,
+      name:      resolvedName,
+      desc:      resolvedDesc,
       logo:      'https://logo.clearbit.com/' + domain,
       logoFallback: scraped.logo ?? null,
       website:   'https://' + domain,
@@ -701,7 +744,9 @@
       hq:        scraped.hq        ?? null,
       employees: scraped.employees ?? null,
       industry:  null,
-      revenue:   null, erp: null, tags: null,
+      revenue:   null,
+      erp:       inferErp(resolvedName, resolvedDesc),
+      tags:      null,
     };
   }
 
@@ -710,7 +755,7 @@
   // Provides: structured description, official website, founding year,
   // employee count, headquarters, and industry classification.
 
-  const COMPANY_DESC = /\b(company|corporation|inc\b|ltd\b|llc\b|multinational|vendor|manufacturer|conglomerate|provider)\b/i;
+  const COMPANY_DESC = /\b(company|corporation|inc\b|ltd\b|llc\b|multinational|vendor|manufacturer|conglomerate|provider|software|enterprise|platform|system|erp)\b/i;
 
   async function fetchFromWikidata(name) {
     const searchRes = await fetch(
@@ -767,9 +812,12 @@
       ? 'https://commons.wikimedia.org/wiki/Special:FilePath/' + encodeURIComponent(logoFile)
       : null;
 
+    const wdName = entity.labels?.en?.value ?? hit.label;
+    const wdDesc = extract ? (extract.length > 400 ? extract.slice(0, 397) + '…' : extract) : (hit.description ?? null);
+
     return {
-      name:         entity.labels?.en?.value ?? hit.label,
-      desc:         extract ? (extract.length > 400 ? extract.slice(0, 397) + '…' : extract) : (hit.description ?? null),
+      name:         wdName,
+      desc:         wdDesc,
       logo:         domain ? 'https://logo.clearbit.com/' + domain : commonsLogo ?? wikiThumb,
       logoFallback: wikiThumb ?? commonsLogo ?? null,
       website,
@@ -778,7 +826,9 @@
       hq:           null,
       employees,
       industry:     hit.description ?? null,
-      revenue:      null, erp: null, tags: null,
+      revenue:      null,
+      erp:          inferErp(wdName, wdDesc),
+      tags:         null,
     };
   }
 
