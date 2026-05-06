@@ -265,61 +265,89 @@
       <!-- Company Snapshot (left) + Latest News (right) -->
       <div class="grid grid-cols-1 lg:grid-cols-12 gap-4">
 
-        <!-- Company Snapshot: left, ~1/3 width on desktop. Skeleton placeholder. -->
-        <section class="lg:col-span-4 self-start bg-surface border border-border rounded-lg shadow-ambient p-card hover:border-border-strong transition-colors">
+        <!-- Company Snapshot: left, ~1/3 width on desktop -->
+        <section class="lg:col-span-4 bg-surface border border-border rounded-lg shadow-ambient p-card hover:border-border-strong transition-colors flex flex-col">
           <div class="flex items-center justify-between border-b border-border pb-3 mb-3">
             <h3 class="text-headline-sm text-ink flex items-center gap-2">
               <span class="material-symbols-outlined text-primary" aria-hidden="true">domain</span>
               Company Snapshot
             </h3>
-            <button aria-label="More options" class="w-7 h-7 rounded hover:bg-surface-2 text-ink-faint flex items-center justify-center"><span class="material-symbols-outlined" style="font-size:18px;">more_vert</span></button>
+            <button aria-label="More options" class="w-7 h-7 rounded hover:bg-surface-2 text-ink-faint flex items-center justify-center"><span class="material-symbols-outlined" style="font-size:18px;" aria-hidden="true">more_vert</span></button>
           </div>
 
-          <!-- Logo + name -->
+          <!-- Logo + canonical name -->
           <div class="flex items-center gap-3 mb-3">
-            <div class="w-10 h-10 rounded-lg bg-surface-2 border border-border flex items-center justify-center shrink-0">
-              <span class="material-symbols-outlined text-ink-faint" aria-hidden="true">business</span>
+            <div class="w-10 h-10 rounded-lg bg-surface-2 border border-border flex items-center justify-center shrink-0 overflow-hidden">
+              <img id="snap-logo-img" src="" alt="" class="w-10 h-10 object-contain hidden" />
+              <span id="snap-logo-icon" class="material-symbols-outlined text-ink-faint" aria-hidden="true">business</span>
             </div>
-            <div class="flex-1 space-y-1.5">
-              <div class="h-4 bg-surface-2 rounded w-2/3"></div>
-              <div class="h-3 bg-surface-2 rounded w-1/2"></div>
+            <div class="flex-1 min-w-0">
+              <div id="snap-name-skel" class="h-4 bg-surface-2 rounded w-2/3"></div>
+              <p id="snap-name" class="text-body-sm font-semibold text-ink hidden truncate"></p>
             </div>
           </div>
 
-          <!-- Quick facts -->
+          <!-- One-line description -->
+          <div class="mb-3">
+            <div id="snap-desc-skel" class="space-y-1.5">
+              <div class="h-3 bg-surface-2 rounded w-full"></div>
+              <div class="h-3 bg-surface-2 rounded w-5/6"></div>
+              <div class="h-3 bg-surface-2 rounded w-3/4"></div>
+            </div>
+            <p id="snap-desc" class="text-body-sm text-ink-muted hidden line-clamp-3"></p>
+          </div>
+
+          <!-- Quick facts grid -->
           <dl class="grid grid-cols-2 gap-2 mb-3">
             <div>
               <dt class="text-label-sm uppercase tracking-wider text-ink-faint mb-0.5">Industry</dt>
-              <dd class="h-3.5 bg-surface-2 rounded w-3/4"></dd>
+              <div id="snap-industry-skel" class="h-3.5 bg-surface-2 rounded w-3/4"></div>
+              <dd id="snap-industry" class="text-body-sm text-ink hidden"></dd>
             </div>
             <div>
               <dt class="text-label-sm uppercase tracking-wider text-ink-faint mb-0.5">HQ</dt>
-              <dd class="h-3.5 bg-surface-2 rounded w-2/3"></dd>
+              <div id="snap-hq-skel" class="h-3.5 bg-surface-2 rounded w-2/3"></div>
+              <dd id="snap-hq" class="text-body-sm text-ink hidden"></dd>
             </div>
             <div>
               <dt class="text-label-sm uppercase tracking-wider text-ink-faint mb-0.5">Employees</dt>
-              <dd class="h-3.5 bg-surface-2 rounded w-1/2"></dd>
+              <div id="snap-employees-skel" class="h-3.5 bg-surface-2 rounded w-1/2"></div>
+              <dd id="snap-employees" class="text-body-sm text-ink hidden"></dd>
             </div>
             <div>
               <dt class="text-label-sm uppercase tracking-wider text-ink-faint mb-0.5">Founded</dt>
-              <dd class="h-3.5 bg-surface-2 rounded w-1/3"></dd>
+              <div id="snap-founded-skel" class="h-3.5 bg-surface-2 rounded w-1/3"></div>
+              <dd id="snap-founded" class="text-body-sm text-ink hidden"></dd>
             </div>
             <div>
               <dt class="text-label-sm uppercase tracking-wider text-ink-faint mb-0.5">Revenue</dt>
-              <dd class="h-3.5 bg-surface-2 rounded w-2/3"></dd>
+              <div id="snap-revenue-skel" class="h-3.5 bg-surface-2 rounded w-2/3"></div>
+              <dd id="snap-revenue" class="text-body-sm text-ink hidden"></dd>
             </div>
             <div>
-              <dt class="text-label-sm uppercase tracking-wider text-ink-faint mb-0.5">ERP Stack</dt>
-              <dd class="h-3.5 bg-surface-2 rounded w-3/4"></dd>
+              <dt class="text-label-sm uppercase tracking-wider text-ink-faint mb-0.5">Products / ERP</dt>
+              <div id="snap-erp-skel" class="h-3.5 bg-surface-2 rounded w-3/4"></div>
+              <dd id="snap-erp" class="text-body-sm text-ink hidden"></dd>
             </div>
           </dl>
 
-          <!-- Tags placeholder -->
-          <div class="flex flex-wrap gap-1.5 mb-3">
+          <!-- Tags (hidden until populated by curated sheet) -->
+          <div id="snap-tags-skel" class="flex flex-wrap gap-1.5 mb-3">
             <span class="px-2 py-0.5 rounded bg-surface-2 border border-border h-5 w-16"></span>
             <span class="px-2 py-0.5 rounded bg-surface-2 border border-border h-5 w-20"></span>
             <span class="px-2 py-0.5 rounded bg-surface-2 border border-border h-5 w-14"></span>
           </div>
+          <div id="snap-tags" style="display:none" class="flex-wrap gap-1.5 mb-3"></div>
+
+          <!-- Website link (revealed by JS) -->
+          <div id="snap-website-row" style="display:none" class="flex items-center gap-1.5 mb-3">
+            <span class="material-symbols-outlined text-ink-faint" style="font-size:14px;" aria-hidden="true">language</span>
+            <a id="snap-website" href="#" target="_blank" rel="noopener noreferrer"
+               class="text-body-sm text-primary hover:underline truncate"></a>
+          </div>
+
+          <!-- Spacer: pushes CTA to the card bottom when card is taller than content -->
+          <div class="flex-1 min-h-2"></div>
 
           <!-- CTA -->
           <button class="w-full h-9 inline-flex items-center justify-center gap-2 bg-surface-2 hover:bg-bg border border-border text-ink-muted text-label-md rounded transition">
@@ -555,6 +583,217 @@
       }, 8000);
     }
   })();
+</script>
+
+<!-- ── Company Snapshot data: Wikidata (primary) + Google Sheets CSV (curated override) ── -->
+<script>
+(function () {
+  const q = (new URLSearchParams(location.search).get('q') || '').trim();
+  if (!q) return; // Only runs on the dashboard view
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // CONFIGURATION
+  // To support companies not in Wikidata (e.g. Masssoft), create a Google Sheet
+  // with these columns (first row = headers, exact names):
+  //   query | name | desc | industry | hq | employees | founded | revenue | erp | website | domain | tags
+  // Then: File → Share → Publish to web → choose "Comma-separated values (.csv)"
+  // Paste the published CSV URL below.
+  const SHEET_CSV_URL = '';
+  // ─────────────────────────────────────────────────────────────────────────
+
+  // ── Wikidata API helpers ────────────────────────────────────────
+  const WD = 'https://www.wikidata.org/w/api.php';
+
+  function wdGet(params) {
+    const url = WD + '?' + new URLSearchParams({ format: 'json', origin: '*', ...params });
+    return fetch(url).then(r => r.ok ? r.json() : null).catch(() => null);
+  }
+
+  const strVal  = (cl, p) => cl[p]?.[0]?.mainsnak?.datavalue?.value ?? null;
+  const yearVal = (cl, p) => { const t = cl[p]?.[0]?.mainsnak?.datavalue?.value?.time; return t ? t.slice(1, 5) : null; };
+  const itemId  = (cl, p) => cl[p]?.[0]?.mainsnak?.datavalue?.value?.id ?? null;
+
+  function fmtN(raw) {
+    const n = Math.abs(+raw);
+    if (n >= 1e9) return (n / 1e9).toFixed(1) + 'B';
+    if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+    if (n >= 1e3) return Math.round(n / 1e3) + 'K';
+    return n.toLocaleString();
+  }
+
+  function quantityVal(cl, p) {
+    const amt = cl[p]?.[0]?.mainsnak?.datavalue?.value?.amount;
+    return amt ? fmtN(amt) : null;
+  }
+
+  function revenueVal(cl) {
+    const arr = (cl.P2139 || []).filter(c => c.mainsnak?.datavalue?.value?.amount);
+    if (!arr.length) return null;
+    // Pick the entry with the most recent point-in-time qualifier (P585)
+    arr.sort((a, b) => {
+      const ta = a.qualifiers?.P585?.[0]?.datavalue?.value?.time || '';
+      const tb = b.qualifiers?.P585?.[0]?.datavalue?.value?.time || '';
+      return tb.localeCompare(ta);
+    });
+    const v  = arr[0].mainsnak.datavalue.value;
+    const yr = arr[0].qualifiers?.P585?.[0]?.datavalue?.value?.time?.slice(1, 5);
+    return yr ? fmtN(v.amount) + ' (' + yr + ')' : fmtN(v.amount);
+  }
+
+  // ── Fetch from Wikidata ─────────────────────────────────────────
+  async function fromWikidata(query) {
+    const sd = await wdGet({ action: 'wbsearchentities', search: query, language: 'en', type: 'item', limit: 10 });
+    if (!sd?.search?.length) return null;
+
+    // Prefer results whose description suggests a business entity
+    const bizWords = ['company', 'corporation', 'enterprise', 'software', 'technology', 'solutions',
+                      'business', 'group', 'limited', 'manufacturer', 'vendor', 'provider', 'multinational'];
+    const match = sd.search.find(r => bizWords.some(w => (r.description || '').toLowerCase().includes(w)))
+                  || sd.search[0];
+    if (!match) return null;
+
+    const dd = await wdGet({ action: 'wbgetentities', ids: match.id, props: 'labels|descriptions|claims', languages: 'en' });
+    const e  = dd?.entities?.[match.id];
+    if (!e) return null;
+
+    const cl        = e.claims || {};
+    const name      = e.labels?.en?.value || match.label;
+    const desc      = e.descriptions?.en?.value || '';
+    const website   = strVal(cl, 'P856');
+    const founded   = yearVal(cl, 'P571');
+    const revenue   = revenueVal(cl);
+    const employees = quantityVal(cl, 'P1128');
+
+    // Gather item IDs that need a second label-fetch
+    const hqId      = itemId(cl, 'P159');
+    const indId     = itemId(cl, 'P452');
+    const ctryId    = itemId(cl, 'P17');
+    // Products (P1056) → ERP / Products field; take up to 3
+    const prodIds   = (cl.P1056 || []).slice(0, 3)
+                        .map(c => c.mainsnak?.datavalue?.value?.id).filter(Boolean);
+    const refIds    = [...new Set([hqId, indId, ctryId, ...prodIds].filter(Boolean))];
+
+    let hq = null, industry = null, erp = null;
+    if (refIds.length) {
+      const ld = await wdGet({ action: 'wbgetentities', ids: refIds.join('|'), props: 'labels', languages: 'en' });
+      if (ld?.entities) {
+        const lbl  = id => ld.entities[id]?.labels?.en?.value ?? null;
+        const city = hqId  ? lbl(hqId)  : null;
+        const ctry = ctryId ? lbl(ctryId) : null;
+        hq       = [city, ctry].filter(Boolean).join(', ') || null;
+        industry = indId ? lbl(indId) : null;
+        erp      = prodIds.map(lbl).filter(Boolean).join(', ') || null;
+      }
+    }
+
+    let domain = null;
+    if (website) { try { domain = new URL(website).hostname.replace(/^www\./, ''); } catch {} }
+
+    return { name, desc, website, domain, founded, revenue, employees, hq, industry, erp, tags: null };
+  }
+
+  // ── Fetch from Google Sheet CSV ─────────────────────────────────
+  async function fromSheet(query) {
+    if (!SHEET_CSV_URL) return null;
+    try {
+      const res = await fetch(SHEET_CSV_URL);
+      if (!res.ok) return null;
+      const lines   = (await res.text()).trim().split('\n');
+      const headers = lines[0].split(',').map(h => h.trim().replace(/^"|"$/g, '').toLowerCase());
+      const qIdx    = headers.indexOf('query');
+      if (qIdx === -1) return null;
+      const row = lines.slice(1).map(l => l.split(',').map(c => c.trim().replace(/^"|"$/g, '')))
+                       .find(r => (r[qIdx] || '').toLowerCase() === query.toLowerCase());
+      if (!row) return null;
+      const get = key => { const i = headers.indexOf(key); return i >= 0 && row[i] ? row[i] : null; };
+      return {
+        name: get('name'), desc: get('desc'), website: get('website'), domain: get('domain'),
+        founded: get('founded'), revenue: get('revenue'), employees: get('employees'),
+        hq: get('hq'), industry: get('industry'), erp: get('erp'),
+        tags: get('tags') ? get('tags').split('|').map(t => t.trim()).filter(Boolean) : null,
+      };
+    } catch { return null; }
+  }
+
+  // ── DOM helpers ─────────────────────────────────────────────────
+  function reveal(skelId, ddId, value) {
+    if (!value) return false;
+    const skel = document.getElementById(skelId);
+    const dd   = document.getElementById(ddId);
+    if (skel) skel.classList.add('hidden');
+    if (dd)   { dd.textContent = value; dd.classList.remove('hidden'); }
+    return true;
+  }
+
+  // ── Render snapshot card ────────────────────────────────────────
+  function render(d) {
+    // Clearbit logo (graceful: icon stays if image 404s)
+    if (d.domain) {
+      const img  = document.getElementById('snap-logo-img');
+      const icon = document.getElementById('snap-logo-icon');
+      if (img) {
+        img.alt = d.name || '';
+        img.src = 'https://logo.clearbit.com/' + d.domain;
+        img.onload  = () => { img.classList.remove('hidden'); icon?.classList.add('hidden'); };
+        img.onerror = () => {}; // keep the fallback icon
+      }
+    }
+
+    // Update page headline with canonical company name
+    if (d.name) {
+      ['company-name', 'news-company-name'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.textContent = d.name;
+      });
+      document.title = d.name + ' — ERP Search Tool';
+    }
+
+    // Card fields
+    reveal('snap-name-skel',      'snap-name',      d.name);
+    reveal('snap-desc-skel',      'snap-desc',      d.desc);
+    reveal('snap-industry-skel',  'snap-industry',  d.industry);
+    reveal('snap-hq-skel',        'snap-hq',        d.hq);
+    reveal('snap-employees-skel', 'snap-employees', d.employees);
+    reveal('snap-founded-skel',   'snap-founded',   d.founded);
+    reveal('snap-revenue-skel',   'snap-revenue',   d.revenue);
+    reveal('snap-erp-skel',       'snap-erp',       d.erp);
+
+    // Website link
+    if (d.website) {
+      const link = document.getElementById('snap-website');
+      const row  = document.getElementById('snap-website-row');
+      if (link && row) {
+        link.href = d.website;
+        try { link.textContent = new URL(d.website).hostname.replace(/^www\./, ''); }
+        catch { link.textContent = d.website; }
+        row.style.display = 'flex';
+      }
+    }
+
+    // Tags (pipe-delimited in sheet: "ERP|Cloud|SaaS")
+    const tagSkel = document.getElementById('snap-tags-skel');
+    const tagBox  = document.getElementById('snap-tags');
+    if (d.tags?.length && tagBox) {
+      tagBox.innerHTML = d.tags.map(t =>
+        `<span class="px-2 py-0.5 rounded-full bg-surface-2 border border-border text-label-sm text-ink-muted">${t}</span>`
+      ).join('');
+      tagBox.style.display = 'flex';
+      if (tagSkel) tagSkel.classList.add('hidden');
+    } else if (d.name) {
+      // Data loaded but no tags — hide skeleton so it doesn't look mismatched
+      if (tagSkel) tagSkel.classList.add('hidden');
+    }
+  }
+
+  // ── Entry point ─────────────────────────────────────────────────
+  async function load() {
+    const data = (await fromSheet(q)) || (await fromWikidata(q));
+    if (data) render(data);
+    // If no data found, skeletons stay — honest loading/no-data state
+  }
+
+  load();
+})();
 </script>
 </body>
 </html>
