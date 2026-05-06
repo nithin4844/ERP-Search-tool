@@ -592,20 +592,20 @@
   })();
 </script>
 
-<!-- ── Company Snapshot: DuckDuckGo search + company website scraping + Google Sheets override ── -->
+<!-- ── Company Snapshot data loader: Wikipedia + Wikidata + Clearbit + Google Sheet override ── -->
 <script>
 (function () {
   const q = (new URLSearchParams(location.search).get('q') || '').trim();
   if (!q) return;
 
-  // ── CONFIGURATION ───────────────────────────────────────────────
-  // For companies DuckDuckGo can't find (e.g. Masssoft), create a Google Sheet
+  // ── CONFIGURATION ────────────────────────────────────────────────
+  // For companies not on Wikipedia (e.g. Masssoft), publish a Google Sheet as CSV
   // with these column headers (row 1, exact names):
   //   query | name | desc | industry | hq | employees | founded | revenue | erp | website | logo | tags
-  // File → Share → Publish to web → CSV format. Paste the URL below.
+  // File → Share → Publish to web → CSV. Paste the URL below.
   const SHEET_CSV_URL = '';
 
-  // ── Website scraping via CORS proxy ─────────────────────────────
+  // ── Website scraping (JSON-LD + meta tags) ───────────────────────
   function getMeta(html, ...attrs) {
     for (const a of attrs) {
       const re  = new RegExp('<meta[^>]+(?:name|property)=["\']' + a + '["\'][^>]+content=["\']([^"\']+)["\']', 'i');
@@ -625,12 +625,12 @@
         let d = JSON.parse(m[1]);
         if (Array.isArray(d)) d = d.find(x => /Organization|Corporation|Company/i.test(x['@type'] || '')) || d[0];
         if (!d) continue;
-        if (d.foundingDate)               out.founded   = String(d.foundingDate).slice(0, 4);
-        if (d.numberOfEmployees?.value)   out.employees = String(d.numberOfEmployees.value);
-        if (d.description && !out.desc)   out.desc      = d.description;
-        if (d.address?.addressLocality)   out.hq        = [d.address.addressLocality, d.address.addressCountry].filter(Boolean).join(', ');
-        const logoVal = d.logo?.url || (typeof d.logo === 'string' ? d.logo : null);
-        if (logoVal && !out.logo)         out.logo      = logoVal;
+        if (d.foundingDate)              out.founded   = String(d.foundingDate).slice(0, 4);
+        if (d.numberOfEmployees?.value)  out.employees = String(d.numberOfEmployees.value);
+        if (d.description && !out.desc)  out.desc      = d.description;
+        if (d.address?.addressLocality)  out.hq        = [d.address.addressLocality, d.address.addressCountry].filter(Boolean).join(', ');
+        const lv = d.logo?.url || (typeof d.logo === 'string' ? d.logo : null);
+        if (lv && !out.logo)             out.logo      = lv;
       } catch {}
     }
     return out;
@@ -644,7 +644,7 @@
       const jld = parseJsonLd(html);
       return {
         desc:      jld.desc      || getMeta(html, 'og:description', 'description') || null,
-        logo:      jld.logo      || getMeta(html, 'og:image', 'twitter:image')     || null,
+        logo:      jld.logo      || null,
         founded:   jld.founded   || null,
         hq:        jld.hq        || null,
         employees: jld.employees || null,
@@ -652,49 +652,89 @@
     } catch { return {}; }
   }
 
-  // ── DuckDuckGo Instant Answer ────────────────────────────────────
-  const BIZ_RE = /\b(company|corporation|inc\b|ltd\b|software|enterprise|group|technologies|solutions|vendor|provider|multinational)\b/i;
+  // ── Wikipedia + Wikidata (primary source) ────────────────────────
+  const BIZ_RE = /\b(company|corporation|corp\b|inc\b|ltd\b|llc\b|software|enterprise|technologies|solutions|provider|multinational|vendor|manufacturer|conglomerate)\b/i;
 
-  async function fromDDG(query) {
-    // Try bare query first; if result looks non-business, retry with context suffixes
-    for (const suffix of ['', ' company', ' software', ' ERP', ' Inc']) {
-      try {
-        const url = 'https://api.duckduckgo.com/?q=' + encodeURIComponent(query + suffix)
-                  + '&format=json&no_redirect=1&no_html=1&skip_disambig=1';
-        const d = await fetch(url).then(r => r.json());
-        if (!d?.Heading) continue;
+  async function fromWikipedia(query) {
+    try {
+      // 1. Search Wikipedia for the company page
+      const searchRes = await fetch(
+        'https://en.wikipedia.org/w/api.php?' + new URLSearchParams({
+          action: 'query', list: 'search', srsearch: query,
+          srlimit: '8', srprop: 'snippet', format: 'json', origin: '*',
+        })
+      ).then(r => r.json());
 
-        const abstract = d.AbstractText || '';
-        // Must have OfficialSite or the abstract must sound like a business
-        if (!d.OfficialSite && !BIZ_RE.test(abstract)) continue;
+      const hits = searchRes?.query?.search || [];
+      let title = null;
+      for (const h of hits) {
+        const text = h.title + ' ' + (h.snippet || '').replace(/<[^>]+>/g, '');
+        if (BIZ_RE.test(text)) { title = h.title; break; }
+      }
+      if (!title && hits.length) title = hits[0].title;
+      if (!title) return null;
 
-        const website = d.OfficialSite || null;
-        let domain = null;
-        if (website) { try { domain = new URL(website).hostname.replace(/^www\./, ''); } catch {} }
+      // 2. Page summary + pageprops in parallel
+      const [summary, propsRes] = await Promise.all([
+        fetch('https://en.wikipedia.org/api/rest_v1/page/summary/' + encodeURIComponent(title))
+          .then(r => r.json()),
+        fetch('https://en.wikipedia.org/w/api.php?' + new URLSearchParams({
+          action: 'query', prop: 'pageprops', titles: title, format: 'json', origin: '*',
+        })).then(r => r.json()),
+      ]);
 
-        const scraped = domain ? await scrapeWebsite(domain) : {};
-        const ddgLogo = d.Image ? 'https://duckduckgo.com' + d.Image : null;
+      if (!summary?.extract || summary.type === 'disambiguation') return null;
 
-        return {
-          name:      d.Heading,
-          desc:      scraped.desc || (abstract ? (abstract.length > 350 ? abstract.slice(0, 347) + '…' : abstract) : null),
-          logo:      scraped.logo || ddgLogo,
-          website,
-          domain,
-          founded:   scraped.founded   || null,
-          hq:        scraped.hq        || null,
-          employees: scraped.employees || null,
-          industry:  null,
-          revenue:   null,
-          erp:       null,
-          tags:      null,
-        };
-      } catch { continue; }
-    }
-    return null;
+      // 3. Official website from Wikidata property P856
+      const qid = Object.values(propsRes?.query?.pages || {})[0]?.pageprops?.wikibase_item;
+      let website = null;
+      if (qid) {
+        const wdRes = await fetch(
+          'https://www.wikidata.org/w/api.php?' + new URLSearchParams({
+            action: 'wbgetentities', ids: qid, props: 'claims', format: 'json', origin: '*',
+          })
+        ).then(r => r.json());
+        const p856 = wdRes?.entities?.[qid]?.claims?.P856?.[0];
+        if (p856) website = p856.mainsnak?.datavalue?.value;
+      }
+
+      // 4. Derive domain (from Wikidata URL or heuristic guess)
+      let domain = null;
+      if (website) {
+        try { domain = new URL(website).hostname.replace(/^www\./, ''); } catch {}
+      } else {
+        domain = summary.title
+          .toLowerCase()
+          .replace(/\b(se|plc|inc|ltd|llc|corp|corporation|company|group|ag|gmbh|bv|nv|sa|ab|oy)\b/g, '')
+          .replace(/[^a-z0-9]/g, '') + '.com';
+      }
+
+      // 5. Scrape website for structured details (best-effort)
+      const scraped = domain ? await scrapeWebsite(domain) : {};
+
+      const extract = summary.extract || '';
+      const desc    = scraped.desc || (extract.length > 400 ? extract.slice(0, 397) + '…' : extract) || null;
+      const wikiThumb = summary.thumbnail?.source || null;
+
+      return {
+        name:      summary.title,
+        desc,
+        logo:      domain ? 'https://logo.clearbit.com/' + domain : wikiThumb,
+        wikiThumb,
+        website:   website || (domain ? 'https://' + domain : null),
+        domain,
+        founded:   scraped.founded   || null,
+        hq:        scraped.hq        || null,
+        employees: scraped.employees || null,
+        industry:  summary.description || null,
+        revenue:   null,
+        erp:       null,
+        tags:      null,
+      };
+    } catch { return null; }
   }
 
-  // ── Google Sheet CSV (first-priority override) ───────────────────
+  // ── Google Sheet CSV override ────────────────────────────────────
   async function fromSheet(query) {
     if (!SHEET_CSV_URL) return null;
     try {
@@ -711,7 +751,7 @@
       const get = k => { const i = headers.indexOf(k); return i >= 0 && row[i] ? row[i] : null; };
       return {
         name: get('name'), desc: get('desc'), logo: get('logo'),
-        website: get('website'), domain: get('domain'),
+        website: get('website'), domain: null,
         founded: get('founded'), revenue: get('revenue'), employees: get('employees'),
         hq: get('hq'), industry: get('industry'), erp: get('erp'),
         tags: get('tags') ? get('tags').split('|').map(t => t.trim()).filter(Boolean) : null,
@@ -719,16 +759,15 @@
     } catch { return null; }
   }
 
-  // ── DOM helper ──────────────────────────────────────────────────
-  function reveal(skelId, ddId, value) {
-    if (!value) return;
+  // ── DOM helpers ──────────────────────────────────────────────────
+  function reveal(skelId, elId, value) {
     const skel = document.getElementById(skelId);
-    const dd   = document.getElementById(ddId);
+    const el   = document.getElementById(elId);
     if (skel) skel.classList.add('hidden');
-    if (dd)   { dd.textContent = value; dd.classList.remove('hidden'); }
+    if (el)   { el.textContent = value || '—'; el.classList.remove('hidden'); }
   }
 
-  // ── Render ──────────────────────────────────────────────────────
+  // ── Render ───────────────────────────────────────────────────────
   function render(d) {
     const img    = document.getElementById('snap-logo-img');
     const icon   = document.getElementById('snap-logo-icon');
@@ -737,15 +776,27 @@
     if (d.logo && img) {
       img.alt = d.name || '';
       img.src = d.logo;
-      img.onload  = () => { img.classList.remove('hidden'); icon?.classList.add('hidden'); logoBg?.classList.remove('animate-pulse','bg-border'); };
-      img.onerror = () => { icon?.classList.remove('hidden'); logoBg?.classList.remove('animate-pulse','bg-border'); };
+      img.onload = () => {
+        img.classList.remove('hidden');
+        icon?.classList.add('hidden');
+        logoBg?.classList.remove('animate-pulse', 'bg-border');
+      };
+      img.onerror = () => {
+        // Clearbit failed → try Wikipedia thumbnail
+        if (d.wikiThumb && img.src !== d.wikiThumb) {
+          img.src = d.wikiThumb;
+        } else {
+          icon?.classList.remove('hidden');
+          logoBg?.classList.remove('animate-pulse', 'bg-border');
+        }
+      };
     } else {
       icon?.classList.remove('hidden');
-      logoBg?.classList.remove('animate-pulse','bg-border');
+      logoBg?.classList.remove('animate-pulse', 'bg-border');
     }
 
     if (d.name) {
-      ['company-name','news-company-name'].forEach(id => {
+      ['company-name', 'news-company-name'].forEach(id => {
         const el = document.getElementById(id);
         if (el) el.textContent = d.name;
       });
@@ -780,27 +831,27 @@
       ).join('');
       tagBox.style.display = 'flex';
       if (tagSkel) tagSkel.classList.add('hidden');
-    } else if (d.name) {
+    } else {
       if (tagSkel) tagSkel.classList.add('hidden');
     }
   }
 
-  // ── No-data state ───────────────────────────────────────────────
+  // ── No-data state ────────────────────────────────────────────────
   function renderEmpty(query) {
     ['snap-name-skel','snap-desc-skel','snap-industry-skel','snap-hq-skel',
      'snap-employees-skel','snap-founded-skel','snap-revenue-skel','snap-erp-skel',
      'snap-tags-skel'].forEach(id => { document.getElementById(id)?.classList.add('hidden'); });
     document.getElementById('snap-logo-icon')?.classList.remove('hidden');
-    document.getElementById('snap-logo-img')?.parentElement?.classList.remove('animate-pulse','bg-border');
+    document.getElementById('snap-logo-img')?.parentElement?.classList.remove('animate-pulse', 'bg-border');
     const msg = document.getElementById('snap-no-data-msg');
     if (msg) msg.textContent = '"' + query + '" not found. Add it to the Google Sheet to populate this card.';
     document.getElementById('snap-no-data')?.classList.remove('hidden');
   }
 
-  // ── Entry point ─────────────────────────────────────────────────
+  // ── Entry point ──────────────────────────────────────────────────
   async function load() {
     try {
-      const data = (await fromSheet(q)) || (await fromDDG(q));
+      const data = (await fromSheet(q)) || (await fromWikipedia(q));
       if (data) render(data);
       else renderEmpty(q);
     } catch { renderEmpty(q); }
