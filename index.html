@@ -272,7 +272,13 @@
               <span class="material-symbols-outlined text-primary" aria-hidden="true">domain</span>
               Company Snapshot
             </h3>
-            <button aria-label="More options" class="w-7 h-7 rounded hover:bg-surface-2 text-ink-faint flex items-center justify-center"><span class="material-symbols-outlined" style="font-size:18px;" aria-hidden="true">more_vert</span></button>
+            <div class="flex items-center gap-2">
+              <div id="snap-status" class="hidden items-center gap-1 px-2 py-0.5 rounded-full bg-primary/10 text-primary text-label-md" role="status" aria-live="polite">
+                <span class="material-symbols-outlined animate-pulse" style="font-size:14px;" aria-hidden="true">auto_awesome</span>
+                <span id="snap-status-text">Researching with Gemini…</span>
+              </div>
+              <button aria-label="More options" class="w-7 h-7 rounded hover:bg-surface-2 text-ink-faint flex items-center justify-center"><span class="material-symbols-outlined" style="font-size:18px;" aria-hidden="true">more_vert</span></button>
+            </div>
           </div>
 
           <!-- Logo + canonical name -->
@@ -605,6 +611,12 @@
   // File → Share → Publish to web → CSV. Paste URL here.
   const SHEET_URL = '';
 
+  // n8n Company Snapshot webhook (Gemini-enriched server-side lookup).
+  // Empty string = disabled (page falls back to client-side Clearbit + Wikidata only).
+  // After activating the n8n workflow, copy its "Production URL" here.
+  const N8N_WEBHOOK_URL = 'http://localhost:5678/webhook/company-snapshot';
+  const N8N_TIMEOUT_MS  = 10000;
+
   // ─── Shared utilities ─────────────────────────────────────────────
 
   function parseMeta(html, ...names) {
@@ -904,8 +916,37 @@
     };
   }
 
-  // ─── Source C: Google Sheet CSV ──────────────────────────────────
-  // Highest-priority override for any company.
+  // ─── Source C: n8n + Gemini ──────────────────────────────────────
+  // Server-side workflow: Clearbit + Wikidata (structured) + Gemini (factual
+  // extraction with strict null-defaults). Returns a merged snapshot in the
+  // exact shape renderCard() expects. Returns null on any failure so the
+  // client-side fallback chain still runs.
+
+  async function fetchFromN8n(name) {
+    if (!N8N_WEBHOOK_URL) return null;
+    const ctrl = new AbortController();
+    const timeoutId = setTimeout(() => ctrl.abort(), N8N_TIMEOUT_MS);
+    try {
+      const res = await fetch(N8N_WEBHOOK_URL, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ company: name }),
+        signal:  ctrl.signal,
+      });
+      if (!res.ok) return null;
+      const data = await res.json();
+      // Treat as a hit only if at least one identifying field came back.
+      if (!data || (!data.name && !data.desc && !data.domain)) return null;
+      return data;
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  // ─── Source D: Google Sheet CSV ──────────────────────────────────
+  // Manual override for any company.
 
   async function fetchFromSheet(name) {
     if (!SHEET_URL) return null;
@@ -956,6 +997,22 @@
 
   // ─── DOM ─────────────────────────────────────────────────────────
 
+  // Toggle the small status pill in the snapshot card header.
+  // Pass a string to show with that label; pass null to hide.
+  function setStatus(text) {
+    const el = document.getElementById('snap-status');
+    if (!el) return;
+    if (text) {
+      const t = document.getElementById('snap-status-text');
+      if (t) t.textContent = text;
+      el.classList.remove('hidden');
+      el.classList.add('flex');
+    } else {
+      el.classList.add('hidden');
+      el.classList.remove('flex');
+    }
+  }
+
   function revealField(skelId, valId, text) {
     document.getElementById(skelId)?.classList.add('hidden');
     const el = document.getElementById(valId);
@@ -963,6 +1020,7 @@
   }
 
   function renderCard(data) {
+    setStatus(null);
     const img    = document.getElementById('snap-logo-img');
     const icon   = document.getElementById('snap-logo-icon');
     const logoBg = img?.parentElement;
@@ -1027,6 +1085,7 @@
   }
 
   function renderNotFound() {
+    setStatus(null);
     for (const id of ['snap-name-skel', 'snap-desc-skel', 'snap-industry-skel', 'snap-hq-skel',
                        'snap-employees-skel', 'snap-founded-skel', 'snap-revenue-skel',
                        'snap-erp-skel', 'snap-tags-skel']) {
@@ -1040,13 +1099,20 @@
   }
 
   // ─── Run ─────────────────────────────────────────────────────────
-  // Sheet wins. For everything else, Clearbit + Wikidata run in parallel
-  // and their results are merged (Clearbit for logo/domain, Wikidata for facts).
+  // Priority order:
+  //   1. Manual sheet override (if SHEET_URL set and query matched)
+  //   2. n8n + Gemini (server-side enriched lookup)
+  //   3. Client-side Clearbit + Wikidata fallback (if n8n is offline / times out)
 
   (async () => {
     const sheet = await fetchFromSheet(query);
     if (sheet) return renderCard(sheet);
 
+    if (N8N_WEBHOOK_URL) setStatus('Researching with Gemini…');
+    const fromN8n = await fetchFromN8n(query);
+    if (fromN8n) return renderCard(fromN8n);
+
+    setStatus('Looking up public records…');
     const [cbResult, wdResult] = await Promise.allSettled([
       fetchFromClearbit(query),
       fetchFromWikidata(query),
