@@ -14,7 +14,10 @@
       "name": "Webhook",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2.1,
-      "position": [240, 400],
+      "position": [
+        240,
+        400
+      ],
       "webhookId": "company-snapshot"
     },
     {
@@ -25,76 +28,91 @@
       "name": "Validate Input",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [460, 400]
+      "position": [
+        464,
+        400
+      ]
     },
     {
       "parameters": {
-        "jsCode": "// Clearbit autocomplete: best for domain + logo. Free, CORS-enabled, ~1M companies.\nconst company = $('Validate Input').first().json.company;\nconst ERP_HINT = /erp|campus|edtech|lms|sms\\b|school|college|student|academic|university/i;\n\nlet data = null;\ntry {\n  const fetchCb = async (q) => {\n    try {\n      return await this.helpers.httpRequest({\n        method: 'GET',\n        url: 'https://autocomplete.clearbit.com/v1/companies/suggest',\n        qs: { query: q },\n        json: true,\n        timeout: 5000\n      });\n    } catch { return []; }\n  };\n\n  let suggestions = await fetchCb(company);\n  const hasErpHit = (s) => ERP_HINT.test(s.domain || '') || ERP_HINT.test(s.name || '');\n  if (Array.isArray(suggestions) && suggestions.length && !suggestions.some(hasErpHit)) {\n    const erpSugs = await fetchCb(company + ' ERP');\n    if (Array.isArray(erpSugs) && erpSugs.length) {\n      const seen = new Set(suggestions.map(s => s.domain));\n      suggestions = [...suggestions, ...erpSugs.filter(s => !seen.has(s.domain))];\n    }\n  }\n\n  if (Array.isArray(suggestions) && suggestions.length) {\n    const qNorm = company.toLowerCase().replace(/[^a-z0-9]/g, '');\n    const score = (label) => {\n      const t = (label || '').toLowerCase().replace(/[^a-z0-9]/g, '');\n      if (t === qNorm) return 5;\n      if (t === qNorm + 'erp' || t === qNorm + 'software' || t === qNorm + 'solutions') return 4;\n      if (t.startsWith(qNorm) && t.length - qNorm.length <= 3) return 3;\n      if (t.startsWith(qNorm)) return 2;\n      const words = company.toLowerCase().split(/\\s+/).filter(w => w.length > 2);\n      if (words.length && words.every(w => t.includes(w))) return 1;\n      return 0;\n    };\n    const ranked = suggestions\n      .map(s => ({ ...s, score: score(s.name || ''), erpHint: hasErpHit(s) }))\n      .filter(s => s.score > 0)\n      .sort((a, b) => b.score - a.score || (b.erpHint ? 1 : 0) - (a.erpHint ? 1 : 0));\n    if (ranked.length) {\n      const topScore = ranked[0].score;\n      const topTier = ranked.filter(s => s.score === topScore);\n      const best = topTier.find(s => s.erpHint)\n                || topTier.find(s => (s.domain || '').replace(/[^a-z0-9]/g, '').includes(qNorm))\n                || topTier[0];\n      if (best && best.domain) {\n        data = {\n          name: best.name,\n          domain: best.domain,\n          website: 'https://' + best.domain,\n          logo: 'https://logo.clearbit.com/' + best.domain\n        };\n      }\n    }\n  }\n} catch (err) { /* swallow — return null */ }\n\nreturn [{ json: { source: 'clearbit', data } }];"
+        "jsCode": "// Clearbit autocomplete: free, CORS-enabled, ~1M companies. Returns BEST pick\n// + filtered candidate domains for the scraper. Filter strategy: case-insensitive\n// but whitespace-preserving exact-name match (drops \"Master Soft\" while keeping\n// \"MasterSoft\"). Max 2 candidates so we don't drown the prompt in noise.\n\nconst company = $('Validate Input').first().json.company;\nconst ERP_HINT = /erp|campus|edtech|lms|sms\\b|school|college|student|academic|university/i;\n\nlet data = null, candidates = [];\ntry {\n  const fetchCb = async (q) => {\n    try {\n      return await this.helpers.httpRequest({\n        method: 'GET',\n        url: 'https://autocomplete.clearbit.com/v1/companies/suggest',\n        qs: { query: q },\n        json: true,\n        timeout: 5000\n      });\n    } catch { return []; }\n  };\n  let suggestions = await fetchCb(company);\n  const hasErpHit = (s) => ERP_HINT.test(s.domain || '') || ERP_HINT.test(s.name || '');\n  if (Array.isArray(suggestions) && suggestions.length && !suggestions.some(hasErpHit)) {\n    const erpSugs = await fetchCb(company + ' ERP');\n    if (Array.isArray(erpSugs) && erpSugs.length) {\n      const seen = new Set(suggestions.map(s => s.domain));\n      suggestions = [...suggestions, ...erpSugs.filter(s => !seen.has(s.domain))];\n    }\n  }\n\n  if (Array.isArray(suggestions) && suggestions.length) {\n    const qNorm = company.toLowerCase().replace(/[^a-z0-9]/g, '');\n    const score = (label) => {\n      const t = (label || '').toLowerCase().replace(/[^a-z0-9]/g, '');\n      if (t === qNorm) return 5;\n      if (t === qNorm + 'erp' || t === qNorm + 'software' || t === qNorm + 'solutions') return 4;\n      if (t.startsWith(qNorm) && t.length - qNorm.length <= 3) return 3;\n      if (t.startsWith(qNorm)) return 2;\n      const words = company.toLowerCase().split(/\\s+/).filter(w => w.length > 2);\n      if (words.length && words.every(w => t.includes(w))) return 1;\n      return 0;\n    };\n\n    const ranked = suggestions\n      .map(s => ({ ...s, score: score(s.name || ''), erpHint: hasErpHit(s) }))\n      .filter(s => s.score > 0)\n      .sort((a, b) => b.score - a.score || (b.erpHint ? 1 : 0) - (a.erpHint ? 1 : 0));\n\n    if (ranked.length) {\n      const topScore = ranked[0].score;\n      const topTier = ranked.filter(s => s.score === topScore);\n      const best = topTier.find(s => s.erpHint)\n                || topTier.find(s => (s.domain || '').replace(/[^a-z0-9]/g, '').includes(qNorm))\n                || topTier[0];\n      if (best && best.domain) {\n        data = {\n          name: best.name,\n          domain: best.domain,\n          website: 'https://' + best.domain,\n          logo: 'https://logo.clearbit.com/' + best.domain\n        };\n      }\n\n      // Strict candidate filter: case-insensitive + whitespace-preserving equality.\n      // \"MasterSoft\" matches \"MasterSoft\" but NOT \"Master Soft\".\n      const queryLower = company.trim().toLowerCase();\n      const strictMatches = ranked.filter(s => (s.name || '').trim().toLowerCase() === queryLower);\n      const pool = strictMatches.length ? strictMatches : ranked.slice(0, 1);\n\n      // Cap at 2 candidate domains. ALWAYS include the picked best domain first.\n      const seen = new Set();\n      candidates = [];\n      if (data && data.domain) { candidates.push(data.domain); seen.add(data.domain); }\n      for (const s of pool) {\n        if (candidates.length >= 2) break;\n        if (s.domain && !seen.has(s.domain)) {\n          candidates.push(s.domain);\n          seen.add(s.domain);\n        }\n      }\n    }\n  }\n} catch (err) { /* swallow */ }\n\nreturn [{ json: { source: 'clearbit', data, candidates } }];\n"
       },
       "id": "f3a1b001-0001-4001-8001-000000000003",
       "name": "Clearbit Lookup",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [680, 400]
+      "position": [
+        688,
+        400
+      ]
     },
     {
       "parameters": {
-        "jsCode": "// Wikidata: authoritative structured facts for companies with Wikipedia presence.\nconst company = $('Validate Input').first().json.company;\nconst COMPANY_RE = /\\b(company|corporation|inc\\b|ltd\\b|llc\\b|multinational|vendor|manufacturer|conglomerate|provider|software|enterprise|platform|system|erp)\\b/i;\nconst norm = (s) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');\nconst labelMatches = (label, q) => {\n  const t = norm(label), s = norm(q);\n  if (!t || !s) return false;\n  if (t === s || t.startsWith(s) || s.startsWith(t)) return true;\n  const words = q.toLowerCase().split(/\\s+/).filter(w => w.length > 2);\n  return words.length > 0 && words.every(w => t.includes(w));\n};\nconst trimDesc = (text, max = 400) => {\n  if (!text || text.length <= max) return text || null;\n  const cut = text.lastIndexOf('. ', max);\n  return cut > 60 ? text.slice(0, cut + 1) : text.slice(0, max - 1) + '\\u2026';\n};\n\nlet data = null;\ntry {\n  const search = await this.helpers.httpRequest({\n    method: 'GET',\n    url: 'https://www.wikidata.org/w/api.php',\n    qs: {\n      action: 'wbsearchentities',\n      search: company,\n      type: 'item',\n      language: 'en',\n      limit: '10',\n      format: 'json'\n    },\n    json: true,\n    timeout: 8000\n  }).catch(() => null);\n\n  const hit = (search && Array.isArray(search.search) ? search.search : []).find(r =>\n    labelMatches(r.label || '', company) && COMPANY_RE.test(r.description || '')\n  );\n\n  if (hit) {\n    const entityRes = await this.helpers.httpRequest({\n      method: 'GET',\n      url: 'https://www.wikidata.org/w/api.php',\n      qs: {\n        action: 'wbgetentities',\n        ids: hit.id,\n        props: 'labels|descriptions|claims|sitelinks',\n        sitefilter: 'enwiki',\n        languages: 'en',\n        format: 'json'\n      },\n      json: true,\n      timeout: 8000\n    }).catch(() => null);\n\n    const entity = entityRes && entityRes.entities && entityRes.entities[hit.id];\n    if (entity) {\n      const claimVal = (prop) => {\n        const c = entity.claims && entity.claims[prop];\n        const snak = c && c[0] && c[0].mainsnak;\n        if (!snak || snak.snaktype !== 'value') return null;\n        const dv = snak.datavalue || {};\n        const t = dv.type, v = dv.value;\n        if (t === 'string')   return v;\n        if (t === 'time')     return v && v.time ? v.time.slice(1, 5) : null;\n        if (t === 'quantity') return v && v.amount ? String(v.amount).replace(/^\\+/, '') : null;\n        return null;\n      };\n      const website   = claimVal('P856');\n      const founded   = claimVal('P571');\n      const employees = claimVal('P1128');\n      const hqId       = (entity.claims && entity.claims.P159 && entity.claims.P159[0] && entity.claims.P159[0].mainsnak && entity.claims.P159[0].mainsnak.datavalue && entity.claims.P159[0].mainsnak.datavalue.value && entity.claims.P159[0].mainsnak.datavalue.value.id) || null;\n      const industryId = (entity.claims && entity.claims.P452 && entity.claims.P452[0] && entity.claims.P452[0].mainsnak && entity.claims.P452[0].mainsnak.datavalue && entity.claims.P452[0].mainsnak.datavalue.value && entity.claims.P452[0].mainsnak.datavalue.value.id) || null;\n\n      let domain = null;\n      try { if (website) domain = new URL(website).hostname.replace(/^www\\./, ''); } catch {}\n\n      const wikiTitle = (entity.sitelinks && entity.sitelinks.enwiki && entity.sitelinks.enwiki.title) || null;\n      const idsToResolve = [hqId, industryId].filter(Boolean);\n\n      const [wiki, labelRes] = await Promise.all([\n        wikiTitle ? this.helpers.httpRequest({\n          method: 'GET',\n          url: 'https://en.wikipedia.org/api/rest_v1/page/summary/' + encodeURIComponent(wikiTitle),\n          json: true,\n          timeout: 8000\n        }).catch(() => null) : Promise.resolve(null),\n        idsToResolve.length ? this.helpers.httpRequest({\n          method: 'GET',\n          url: 'https://www.wikidata.org/w/api.php',\n          qs: {\n            action: 'wbgetentities',\n            ids: idsToResolve.join('|'),\n            props: 'labels',\n            languages: 'en',\n            format: 'json'\n          },\n          json: true,\n          timeout: 8000\n        }).catch(() => null) : Promise.resolve(null)\n      ]);\n\n      const hq       = hqId       ? ((labelRes && labelRes.entities && labelRes.entities[hqId] && labelRes.entities[hqId].labels && labelRes.entities[hqId].labels.en && labelRes.entities[hqId].labels.en.value) || null) : null;\n      const industry = industryId ? ((labelRes && labelRes.entities && labelRes.entities[industryId] && labelRes.entities[industryId].labels && labelRes.entities[industryId].labels.en && labelRes.entities[industryId].labels.en.value) || null) : (hit.description || null);\n\n      data = {\n        name: (entity.labels && entity.labels.en && entity.labels.en.value) || hit.label,\n        desc: trimDesc((wiki && wiki.extract) || null),\n        website,\n        domain,\n        founded,\n        hq,\n        employees,\n        industry\n      };\n    }\n  }\n} catch (err) { /* swallow — return null */ }\n\nreturn [{ json: { source: 'wikidata', data } }];"
+        "jsCode": "// Wikidata: authoritative structured facts for companies with Wikipedia presence.\nconst company = $('Validate Input').first().json.company;\nconst COMPANY_RE = /\\b(company|corporation|inc\\b|ltd\\b|llc\\b|multinational|vendor|manufacturer|conglomerate|provider|software|enterprise|platform|system|erp)\\b/i;\nconst norm = (s) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');\nconst labelMatches = (label, q) => {\n  const t = norm(label), s = norm(q);\n  if (!t || !s) return false;\n  if (t === s || t.startsWith(s) || s.startsWith(t)) return true;\n  const words = q.toLowerCase().split(/\\s+/).filter(w => w.length > 2);\n  return words.length > 0 && words.every(w => t.includes(w));\n};\nconst trimDesc = (text, max = 400) => {\n  if (!text || text.length <= max) return text || null;\n  const cut = text.lastIndexOf('. ', max);\n  return cut > 60 ? text.slice(0, cut + 1) : text.slice(0, max - 1) + '\\u2026';\n};\n\nlet data = null;\ntry {\n  const search = await this.helpers.httpRequest({\n    method: 'GET',\n    url: 'https://www.wikidata.org/w/api.php',\n    qs: {\n      action: 'wbsearchentities',\n      search: company,\n      type: 'item',\n      language: 'en',\n      limit: '10',\n      format: 'json'\n    },\n    json: true,\n    timeout: 8000\n  }).catch(() => null);\n\n  const hit = (search && Array.isArray(search.search) ? search.search : []).find(r =>\n    labelMatches(r.label || '', company) && COMPANY_RE.test(r.description || '')\n  );\n\n  if (hit) {\n    const entityRes = await this.helpers.httpRequest({\n      method: 'GET',\n      url: 'https://www.wikidata.org/w/api.php',\n      qs: {\n        action: 'wbgetentities',\n        ids: hit.id,\n        props: 'labels|descriptions|claims|sitelinks',\n        sitefilter: 'enwiki',\n        languages: 'en',\n        format: 'json'\n      },\n      json: true,\n      timeout: 8000\n    }).catch(() => null);\n\n    const entity = entityRes && entityRes.entities && entityRes.entities[hit.id];\n    if (entity) {\n      const claimVal = (prop) => {\n        const c = entity.claims && entity.claims[prop];\n        const snak = c && c[0] && c[0].mainsnak;\n        if (!snak || snak.snaktype !== 'value') return null;\n        const dv = snak.datavalue || {};\n        const t = dv.type, v = dv.value;\n        if (t === 'string')   return v;\n        if (t === 'time')     return v && v.time ? v.time.slice(1, 5) : null;\n        if (t === 'quantity') return v && v.amount ? String(v.amount).replace(/^\\+/, '') : null;\n        return null;\n      };\n      const website   = claimVal('P856');\n      const founded   = claimVal('P571');\n      const employees = claimVal('P1128');\n      const hqId       = (entity.claims && entity.claims.P159 && entity.claims.P159[0] && entity.claims.P159[0].mainsnak && entity.claims.P159[0].mainsnak.datavalue && entity.claims.P159[0].mainsnak.datavalue.value && entity.claims.P159[0].mainsnak.datavalue.value.id) || null;\n      const industryId = (entity.claims && entity.claims.P452 && entity.claims.P452[0] && entity.claims.P452[0].mainsnak && entity.claims.P452[0].mainsnak.datavalue && entity.claims.P452[0].mainsnak.datavalue.value && entity.claims.P452[0].mainsnak.datavalue.value.id) || null;\n\n      let domain = null;\n      try { if (website) domain = new URL(website).hostname.replace(/^www\\./, ''); } catch {}\n\n      const wikiTitle = (entity.sitelinks && entity.sitelinks.enwiki && entity.sitelinks.enwiki.title) || null;\n      const idsToResolve = [hqId, industryId].filter(Boolean);\n\n      const [wiki, labelRes] = await Promise.all([\n        wikiTitle ? this.helpers.httpRequest({\n          method: 'GET',\n          url: 'https://en.wikipedia.org/api/rest_v1/page/summary/' + encodeURIComponent(wikiTitle),\n          json: true,\n          timeout: 8000\n        }).catch(() => null) : Promise.resolve(null),\n        idsToResolve.length ? this.helpers.httpRequest({\n          method: 'GET',\n          url: 'https://www.wikidata.org/w/api.php',\n          qs: {\n            action: 'wbgetentities',\n            ids: idsToResolve.join('|'),\n            props: 'labels',\n            languages: 'en',\n            format: 'json'\n          },\n          json: true,\n          timeout: 8000\n        }).catch(() => null) : Promise.resolve(null)\n      ]);\n\n      const hq       = hqId       ? ((labelRes && labelRes.entities && labelRes.entities[hqId] && labelRes.entities[hqId].labels && labelRes.entities[hqId].labels.en && labelRes.entities[hqId].labels.en.value) || null) : null;\n      const industry = industryId ? ((labelRes && labelRes.entities && labelRes.entities[industryId] && labelRes.entities[industryId].labels && labelRes.entities[industryId].labels.en && labelRes.entities[industryId].labels.en.value) || null) : (hit.description || null);\n\n      data = {\n        name: (entity.labels && entity.labels.en && entity.labels.en.value) || hit.label,\n        desc: trimDesc((wiki && wiki.extract) || null),\n        website,\n        domain,\n        founded,\n        hq,\n        employees,\n        industry\n      };\n    }\n  }\n} catch (err) { /* swallow \u2014 return null */ }\n\nreturn [{ json: { source: 'wikidata', data } }];"
       },
       "id": "f3a1b001-0001-4001-8001-000000000004",
       "name": "Wikidata Lookup",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [900, 400]
+      "position": [
+        912,
+        400
+      ]
     },
     {
       "parameters": {
-        "jsCode": "// Consolidate prior lookups into one item that the Gemini chain consumes.\nconst company = $('Validate Input').first().json.company;\nconst cb = ($('Clearbit Lookup').first() && $('Clearbit Lookup').first().json && $('Clearbit Lookup').first().json.data) || null;\nconst wd = ($('Wikidata Lookup').first() && $('Wikidata Lookup').first().json && $('Wikidata Lookup').first().json.data) || null;\n\nreturn [{\n  json: {\n    company,\n    knownName:      (wd && wd.name) || (cb && cb.name) || null,\n    knownDomain:    (cb && cb.domain) || (wd && wd.domain) || null,\n    knownDesc:      (wd && wd.desc) || null,\n    knownHq:        (wd && wd.hq) || null,\n    knownFounded:   (wd && wd.founded) || null,\n    knownEmployees: (wd && wd.employees) || null,\n    knownIndustry:  (wd && wd.industry) || null,\n    knownWebsite:   (wd && wd.website) || (cb && cb.website) || null\n  }\n}];"
+        "jsCode": "// Consolidate prior lookups into one item that the Gemini chain consumes.\nconst company = $('Validate Input').first().json.company;\nconst cb = ($('Clearbit Lookup').first() && $('Clearbit Lookup').first().json && $('Clearbit Lookup').first().json.data) || null;\nconst wd = ($('Wikidata Lookup').first() && $('Wikidata Lookup').first().json && $('Wikidata Lookup').first().json.data) || null;\nconst sc = ($('Scrape Homepage').first() && $('Scrape Homepage').first().json) || null;\n\nreturn [{\n  json: {\n    company,\n    knownName:      (wd && wd.name) || (cb && cb.name) || null,\n    knownDomain:    (cb && cb.domain) || (wd && wd.domain) || null,\n    knownDesc:      (wd && wd.desc) || null,\n    knownHq:        (wd && wd.hq) || null,\n    knownFounded:   (wd && wd.founded) || null,\n    knownEmployees: (wd && wd.employees) || null,\n    knownIndustry:  (wd && wd.industry) || null,\n    knownWebsite:   (wd && wd.website) || (cb && cb.website) || null,\n    homepageText:   (sc && sc.homepageText) || null\n  }\n}];"
       },
       "id": "f3a1b001-0001-4001-8001-000000000005",
       "name": "Prepare Gemini Prompt",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1120, 400]
+      "position": [
+        1340,
+        400
+      ]
     },
     {
       "parameters": {
         "promptType": "define",
-        "text": "=Research this company: {{ $json.company }}\n\nVERIFIED FACTS already gathered (treat as ground truth — do NOT contradict these unless you have stronger evidence):\n- Canonical name: {{ $json.knownName || 'unknown' }}\n- Domain: {{ $json.knownDomain || 'unknown' }}\n- Description: {{ $json.knownDesc || 'unknown' }}\n- HQ: {{ $json.knownHq || 'unknown' }}\n- Founded: {{ $json.knownFounded || 'unknown' }}\n- Employees: {{ $json.knownEmployees || 'unknown' }}\n- Industry: {{ $json.knownIndustry || 'unknown' }}\n\nYour task:\n1. Fill in fields where the verified data is unknown.\n2. PRIORITIZE: revenue, erp, tags, desc.\n3. For any field where you cannot achieve high confidence, return null. Do NOT guess.\n4. Echo verified facts back into the corresponding fields when known (e.g. set hq from the verified value).\n\nReturn the JSON object now.",
+        "text": "=Research this company: {{ $json.company }}\n\nVERIFIED STRUCTURED FACTS (from Wikidata/Clearbit):\n- Canonical name: {{ $json.knownName || 'unknown' }}\n- Domain: {{ $json.knownDomain || 'unknown' }}\n- Wikidata description: {{ $json.knownDesc || 'unknown' }}\n- HQ: {{ $json.knownHq || 'unknown' }}\n- Founded: {{ $json.knownFounded || 'unknown' }}\n- Employees: {{ $json.knownEmployees || 'unknown' }}\n- Industry: {{ $json.knownIndustry || 'unknown' }}\n\nCOMPANY'S OWN WEBSITE CONTENT (HIGHEST AUTHORITY when present):\n{{ $json.homepageText || '(homepage was not reachable)' }}\n\n---\n\nPer-field instructions:\n\n- **hq**: Look on the website for an explicit address (street + city + country), [FOOTER] address blocks, /contact pages, or phrases like \"Headquartered in\", \"Based in\", \"Our office in\". Format as \"City, Country\". If the website has it, USE IT \u2014 even if your training data says something different. If website is silent, use the verified Wikidata HQ. If both silent, use your training-data knowledge if high-confidence. Only return null when truly unknown across all three. **Ignore HQ-like cities mentioned in customer testimonials or speaker bios.**\n\n- **founded**: 4-digit year. Use website if stated, else verified facts, else your training data (high-confidence for well-known companies).\n\n- **employees**: numeric string (\"23000\") or short range (\"3000-4000\"). Same priority: website > verified > training data.\n\n- **revenue**: Specific reported figure with fiscal year (e.g. \"$32.7 billion (FY2024)\"). Use training data confidently for major public companies if you know the most recent figure. Null only if unsure.\n\n- **desc**: 2-3 factual sentences derived from website wording (cleaned of marketing fluff). Else from training data.\n\n- **industry**: 1-3 word industry label.\n\n- **erp**: SPECIFIC product name if the company sells/produces an ERP product (e.g. \"MasterSoft EduERP\", \"Ellucian Banner\", \"SAP S/4HANA\", \"Oracle NetSuite\"). Return null if the company is not an ERP vendor \u2014 don't return generic \"ERP\".\n\n- **tags**: 2-4 short labels (industry segment, deployment model, public ticker if listed).\n\nBe confident, not over-cautious. For widely-known companies, your training data IS reliable for founded/employees/revenue \u2014 don't drop those to null. Return null only when you genuinely don't know.\n\nReturn the JSON object now.",
+        "hasOutputParser": true,
         "messages": {
           "messageValues": [
             {
-              "message": "You are a corporate research assistant that extracts factual company data with zero tolerance for hallucination.\n\nABSOLUTE RULES:\n1. Use ONLY information you can verify with high confidence.\n2. Return null for ANY field you cannot verify. Returning fewer fields with high confidence is FAR better than guessing.\n3. NEVER invent, estimate, extrapolate, or paraphrase numbers you do not actually know.\n4. revenue: include only if you know a specific reported figure with fiscal year (e.g. \"$32.7 billion (FY2024)\"). Otherwise null.\n5. erp: include only if the company actually sells/produces an ERP product. Return the SPECIFIC product name (e.g. \"SAP S/4HANA\", \"Oracle NetSuite\", \"MasterSoft EduERP\"). Otherwise null.\n6. tags: 2-4 short classification labels (industry segment, deployment model, public ticker if listed). Otherwise null.\n7. desc: 2-3 factual sentences in plain prose. NO marketing language. NO superlatives. Focus on what the company actually does.\n8. employees: numeric string only, no commas.\n9. founded: 4-digit year only.\n10. hq: \"City, Country\" format.\n\nEvery field in the output schema must be present. Use null when not verified."
+              "message": "You are a corporate research assistant that extracts factual company data accurately.\n\nSOURCE PRIORITY:\n1. Company's own website content (especially [FOOTER] markers and /contact pages) \u2014 HIGHEST authority for HQ city, products, description.\n2. Verified structured facts from Wikidata/Clearbit \u2014 canonical for name, domain, founding year, employees, industry.\n3. Your training data \u2014 confident fallback when 1 and 2 are silent. For widely-known companies, you ARE expected to know founded year, approximate employee count, recent revenue.\n\nOVERRIDE RULES:\n- Website CONTRADICTS your training data on HQ, products: ALWAYS trust website. Training data is often wrong about HQ for non-Western/niche companies.\n- Website silent: use the verified facts or training data confidently.\n\nNEVER:\n- Use a customer testimonial or quoted speaker's affiliation as evidence of the company's HQ.\n- Use marketing superlatives in desc.\n- Return generic \"ERP\" \u2014 return the specific product name.\n- Invent specific numbers (revenue figures, employee counts) that you don't actually know.\n\nBe confident when you do know. Return null only when truly unknown."
             }
           ]
-        },
-        "hasOutputParser": true
+        }
       },
       "id": "f3a1b001-0001-4001-8001-000000000006",
       "name": "Gemini Enrichment",
       "type": "@n8n/n8n-nodes-langchain.chainLlm",
       "typeVersion": 1.5,
-      "position": [1340, 400]
+      "position": [
+        1560,
+        400
+      ]
     },
     {
       "parameters": {
-        "modelName": "models/gemini-1.5-flash",
+        "modelName": "models/gemini-2.5-flash-lite",
         "options": {
           "temperature": 0,
-          "maxOutputTokens": 1024
+          "maxOutputTokens": 4096
         }
       },
       "id": "f3a1b001-0001-4001-8001-000000000007",
       "name": "Gemini Chat Model",
       "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
       "typeVersion": 1,
-      "position": [1240, 600],
-      "credentials": {
-        "googlePalmApi": {
-          "id": "REPLACE_WITH_YOUR_GEMINI_CREDENTIAL_ID",
-          "name": "Google Gemini API"
-        }
-      }
+      "position": [
+        1460,
+        600
+      ],
+      "retryOnFail": true,
+      "maxTries": 4,
+      "waitBetweenTries": 5000
     },
     {
       "parameters": {
@@ -105,7 +123,10 @@
       "name": "Structured Output Parser",
       "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
       "typeVersion": 1.2,
-      "position": [1440, 600]
+      "position": [
+        1660,
+        600
+      ]
     },
     {
       "parameters": {
@@ -115,7 +136,10 @@
       "name": "Priority Merge",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1640, 400]
+      "position": [
+        1860,
+        400
+      ]
     },
     {
       "parameters": {
@@ -124,10 +148,22 @@
         "options": {
           "responseHeaders": {
             "entries": [
-              { "name": "Access-Control-Allow-Origin", "value": "*" },
-              { "name": "Access-Control-Allow-Methods", "value": "POST, OPTIONS" },
-              { "name": "Access-Control-Allow-Headers", "value": "Content-Type" },
-              { "name": "Cache-Control", "value": "public, max-age=21600" }
+              {
+                "name": "Access-Control-Allow-Origin",
+                "value": "*"
+              },
+              {
+                "name": "Access-Control-Allow-Methods",
+                "value": "POST, OPTIONS"
+              },
+              {
+                "name": "Access-Control-Allow-Headers",
+                "value": "Content-Type"
+              },
+              {
+                "name": "Cache-Control",
+                "value": "public, max-age=21600"
+              }
             ]
           }
         }
@@ -136,40 +172,141 @@
       "name": "Respond to Webhook",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,
-      "position": [1860, 400]
+      "position": [
+        2080,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Scrape company website with bias toward contact/about pages where HQ\n// addresses live. Tail-extract footer of homepages too \u2014 addresses there often\n// don't survive a generic head-clip.\n\nconst cb = $('Clearbit Lookup').first() && $('Clearbit Lookup').first().json;\nconst wd = ($('Wikidata Lookup').first() && $('Wikidata Lookup').first().json && $('Wikidata Lookup').first().json.data) || null;\n\nconst cbCandidates = (cb && Array.isArray(cb.candidates)) ? cb.candidates : [];\nconst wdDomain     = (wd && wd.domain) || null;\nconst cbDomain     = (cb && cb.data && cb.data.domain) || null;\n\nconst domains = [...new Set([cbDomain, ...cbCandidates, wdDomain].filter(Boolean))].slice(0, 2);\n\nconst fetchPage = async (url) => {\n  try {\n    const r = await this.helpers.httpRequest({\n      method: 'GET',\n      url,\n      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; CompanySnapshotBot/1.0; +https://example.com/bot)' },\n      timeout: 8000,\n      followRedirect: true\n    });\n    return typeof r === 'string' ? r : (r && r.body) ? r.body : '';\n  } catch { return ''; }\n};\n\nconst stripHtml = (html) => {\n  if (!html || typeof html !== 'string') return '';\n  return html\n    .replace(/<script[^>]*>[\\s\\S]*?<\\/script>/gi, ' ')\n    .replace(/<style[^>]*>[\\s\\S]*?<\\/style>/gi, ' ')\n    .replace(/<noscript[^>]*>[\\s\\S]*?<\\/noscript>/gi, ' ')\n    .replace(/<[^>]+>/g, ' ')\n    .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')\n    .replace(/&quot;/g, '\"').replace(/&#0?39;/g, \"'\").replace(/&nbsp;/g, ' ')\n    .replace(/\\s+/g, ' ')\n    .trim();\n};\n\n// Pull plausible address-bearing chunks: footer (common <footer>, last <div class=\"footer\">),\n// or last 2000 chars of body text as fallback.\nconst extractFooter = (html) => {\n  if (!html) return '';\n  const m = html.match(/<footer[\\s\\S]*?<\\/footer>/gi);\n  if (m && m.length) return stripHtml(m.join(' '));\n  // Heuristic: text near \"address\", \"headquarter\", \"contact us\"\n  return '';\n};\n\n// Each path gets its own budget so /contact (small but high-signal) isn't crowded out.\nconst PATH_BUDGETS = [\n  { path: '/contact-us',  budget: 3000 },\n  { path: '/contact',     budget: 3000 },\n  { path: '/about-us',    budget: 3000 },\n  { path: '/about',       budget: 3000 },\n  { path: '/locations',   budget: 1500 },\n  { path: '/our-offices', budget: 1500 },\n  { path: '/',            budget: 3000 },\n];\nconst PER_DOMAIN_CAP = 9000;\n\nconst sections = [];\nfor (const domain of domains) {\n  const pieces = [];\n  let used = 0;\n  for (const { path, budget } of PATH_BUDGETS) {\n    if (used >= PER_DOMAIN_CAP) break;\n    const html = await fetchPage('https://' + domain + path);\n    if (!html) continue;\n\n    // Always include the footer (where addresses live) regardless of head budget\n    const footer = extractFooter(html).slice(0, 1200);\n    const head   = stripHtml(html).slice(0, Math.max(0, budget - footer.length));\n    const combined = (head + (footer ? ' [FOOTER] ' + footer : '')).trim();\n    if (combined.length > 80) {\n      pieces.push(`[${path}] ${combined}`);\n      used += combined.length;\n    }\n  }\n  if (pieces.length) sections.push('--- ' + domain + ' ---\\n' + pieces.join('\\n').slice(0, PER_DOMAIN_CAP));\n}\n\nconst homepageText = sections.length ? sections.join('\\n\\n').slice(0, 14000) : null;\n\nreturn [{ json: { domains, homepageText } }];\n"
+      },
+      "id": "f3a1b001-0001-4001-8001-00000000000b",
+      "name": "Scrape Homepage",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        400
+      ],
+      "continueOnFail": true
     }
   ],
   "connections": {
     "Webhook": {
-      "main": [[{ "node": "Validate Input", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Validate Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Validate Input": {
-      "main": [[{ "node": "Clearbit Lookup", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Clearbit Lookup",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Clearbit Lookup": {
-      "main": [[{ "node": "Wikidata Lookup", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Wikidata Lookup",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Wikidata Lookup": {
-      "main": [[{ "node": "Prepare Gemini Prompt", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Scrape Homepage",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Prepare Gemini Prompt": {
-      "main": [[{ "node": "Gemini Enrichment", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Gemini Enrichment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Gemini Chat Model": {
-      "ai_languageModel": [[{ "node": "Gemini Enrichment", "type": "ai_languageModel", "index": 0 }]]
+      "ai_languageModel": [
+        [
+          {
+            "node": "Gemini Enrichment",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Structured Output Parser": {
-      "ai_outputParser": [[{ "node": "Gemini Enrichment", "type": "ai_outputParser", "index": 0 }]]
+      "ai_outputParser": [
+        [
+          {
+            "node": "Gemini Enrichment",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Gemini Enrichment": {
-      "main": [[{ "node": "Priority Merge", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Priority Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Priority Merge": {
-      "main": [[{ "node": "Respond to Webhook", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Scrape Homepage": {
+      "main": [
+        [
+          {
+            "node": "Prepare Gemini Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     }
   },
   "settings": {
     "executionOrder": "v1",
+    "binaryMode": "separate",
     "saveExecutionProgress": true,
     "saveManualExecutions": true,
     "callerPolicy": "workflowsFromSameOwner",
